@@ -1,0 +1,6 @@
+test/
+.venv/
+progress.md
+task_plan.md
+findings.md
+__pycache__/

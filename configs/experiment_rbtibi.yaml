@@ -1,0 +1,43 @@
+# RbTiBi Experimental Configuration
+# Raw data: /home/dengxw/ARPES/mapping/data/theory/dataCliu.h5
+# Dataset: RbTiBi/map
+
+exp_name: "RbTiBi"
+exp_path: "/home/dengxw/ARPES/Data/RbTiBi/"
+exp_data: "/home/dengxw/ARPES/mapping/data/theory/dataCliu.h5"
+dataset: "RbTiBi/map"
+dataset_path: ["RbTiBi", "map"]
+
+# Angle-to-momentum conversion parameters
+work_function: 16.03
+
+# Raw data angle ranges
+energy_start: 1.06
+energy_delta: -0.01
+energy_npts: 111
+
+kx_angle_start: -20.3729
+kx_angle_delta: 0.0448678
+kx_angle_npts: 700
+
+ky_angle_start: -7.3251
+ky_angle_delta: 1.0
+ky_angle_npts: 36
+
+# Gamma point calibration shifts (angle space)
+# Use interactive calibration to determine these values
+kx_shift: -0.4
+ky_angle_offset: 0.0
+ky_shift: -1.3
+
+# Grid shifts after angle-to-momentum conversion (momentum space)
+kx_grid_shift: 0.0
+ky_grid_shift: 0.0
+
+# Output
+output: "/home/dengxw/ARPES/Data/RbTiBi/RbTiBi_MON_PIMRE.h5"
+
+# Preprocessing options
+sort_axes: false
+sign_correct: false
+auto_grid: false

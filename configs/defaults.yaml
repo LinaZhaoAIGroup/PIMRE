@@ -1,0 +1,35 @@
+# PIMRE Default Configuration
+# All paths are relative to the project root or absolute.
+
+lattice:
+  a: 5.8077
+  b: 5.8077
+  c: 9.1297
+  alpha: 90
+  beta: 90
+  gamma: 120
+
+k_grid:
+  nkx: 20
+  nky: 20
+
+energy:
+  work_function: 16.03  # eV
+
+bz:
+  n_rotations: 6
+  n_x: 70
+  n_y: 70
+  n_plus: 3
+  scaling_factor: 2
+
+mrf:
+  eta: 0.12
+  include_curv: false
+  num_epochs: 1
+  smooth_sigma: [0.5, 0.5, 0.1]
+
+output:
+  kx_dim: 700
+  ky_dim: 36
+  save_format: h5  # 'h5' or 'mat'

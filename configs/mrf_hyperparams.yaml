@@ -1,0 +1,26 @@
+# MRF Hyperparameters
+# Per-band reconstruction parameters.
+
+crystallographic_data: [5.8077, 5.8077, 9.1297, 90, 90, 120]
+
+bands:
+  - index: 0
+    k_scale: 1.24
+    offset: 0.75
+    eta: 0.0000065
+  - index: 1
+    k_scale: 1.24
+    offset: 0.8
+    eta: 0.0000000065
+  - index: 2
+    k_scale: 1.0
+    offset: 0.76
+    eta: 0.05
+  - index: 3
+    k_scale: 1.24
+    offset: 0.63
+    eta: 0.000000065
+  - index: 4
+    k_scale: 1.24
+    offset: 0.62
+    eta: 0.0045

@@ -1,0 +1,22 @@
+# Experimental Configuration
+# Override defaults for specific experiment.
+
+exp_name: "Au"
+exp_path: "/home/dengxw/ARPES/Data/Au111_Graphite/"
+wave_name: "Au111"
+E_init: 30
+
+wave_info: |
+  Wave: Au111
+  Type: Double Float 64 bit
+  Rows: 61  Start: 2.74  Delta: -0.05  Units: Kinetic Energy [eV]
+  Columns: 700  Start: -16.438  Delta: 0.0473037  Units: Y-Scale [deg]
+  Layers: 36  Start: 1  Delta: 1  Units: Point [au]
+
+# Angle shifts for alignment
+kx_shift: -6.77
+ky_shift: 6.58
+
+# Grid shift post-conversion
+kx_grid_shift: -0.48
+ky_grid_shift: 0.19

@@ -1,0 +1,87 @@
+arpes:
+  dataset: RbTiBi/map
+  energy:
+    delta: -0.01
+    flip: true
+    npts: 111
+    start: 1.06
+  kx_angle:
+    delta: 0.0448678
+    flip: false
+    npts: 700
+    start: -20.3729
+  ky_angle:
+    delta: 1.0
+    flip: false
+    npts: 36
+    start: -7.3251
+  path: /home/dengxw/ARPES/mapping/data/theory/dataCliu.h5
+  work_function: 16.03
+calibration:
+  kx_grid_shift: 0.0
+  kx_shift: 0.05150417962962628
+  ky_grid_shift: 1.1102230246251565e-16
+  ky_shift: 0.05441807228915785
+dft:
+  csv_file: extracted_data.csv
+  fermi_file: BAND_GAP
+  k_grid:
+  - 20
+  - 20
+  output_grid:
+  - 101
+  - 101
+  path: /home/dengxw/ARPES/share_data/RbTiBi/Raw_Data
+lattice:
+  a: 5.8077
+  alpha: 90.0
+  b: 5.8077
+  beta: 90.0
+  c: 9.1297
+  gamma: 120.0
+mrf:
+  bands:
+  - index: 0
+    k_scale: 1.24
+    offset: 0.75
+    eta: 6.5e-06
+  - index: 1
+    k_scale: 1.24
+    offset: 0.8
+    eta: 6.5e-09
+  - index: 2
+    k_scale: 1.0
+    offset: 0.76
+    eta: 0.05
+  - index: 3
+    k_scale: 1.24
+    offset: 0.63
+    eta: 6.5e-08
+  - index: 4
+    k_scale: 1.24
+    offset: 0.62
+    eta: 0.0045
+  bsfi:
+    fine_tune_range: 0.05
+    offset_range: 1.0
+    offset_step: 0.1
+    weights:
+      correlation: 0.6
+      intensity: 0.3
+      snr: 0.1
+  offset_mode: hierarchical
+  smooth_sigma:
+  - 0.5
+  - 0.5
+  - 0.1
+preprocessing:
+  auto_grid: true
+  kd_radius: 0.05
+  n_rotations: 6
+  output_grid: 200
+  output_path: test/exp_preprocessed.h5
+  sign_correct: false
+  sort_axes: true
+  stride: 10
+sample:
+  name: RbTiBi
