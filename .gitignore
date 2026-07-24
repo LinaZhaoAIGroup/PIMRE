@@ -1,4 +1,11 @@
-test/
+test/*.h5
+test/*.mat
+test/*.npy
+test/*.npz
+test/*.png
+test/*.json
+test/*.txt
+test/*.yaml
 .venv/
 progress.md
 task_plan.md

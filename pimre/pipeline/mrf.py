@@ -1,34 +1,39 @@
-#!/usr/bin/env python3
-import argparse, os, sys, json, math
+"""MRF band reconstruction pipeline with BSFI offset optimization.
+
+Workflow:
+  1. Load preprocessed experimental data and DFT band map
+  2. Find HSPs, compute affine transform T (DFT → exp)
+  3. BSFI offset search (hierarchical: shared → per-band fine-tune)
+  4. Final MRF reconstruction with symmetrization
+  5. Generate path plots and save results
+"""
+
+import json
+import math
+import os
+
 import numpy as np
-import scipy.io as sio
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from scipy.signal import savgol_filter
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
 from pimre.config import load_config, crystallographic_data
 from pimre.utils.io import loadHDF
 from pimre.mrf.model import MrfRec
 from pimre.mrf.evaluation import compute_bsfi_2d, compute_affine_transform, map_dft_bands
-from pimre.kpath.symmetry import Get_G_M_K, dft_KM
+from pimre.dft.reader import load_band_map_h5
+from pimre.kpath.symmetry import find_hsps_robust, dft_KM
 from pimre.kpath.path import points2path, bandpath_map as bpm
-
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                           "..", "configs", "pimre_config.yaml")
-TEST_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "test")
-os.makedirs(TEST_DIR, exist_ok=True)
 
 BAND_COLORS = np.array([
     "#FF6B6B", "#B39DDB", "#DA70D6", "#FF4D4D", "#8A2BE2",
     "#4ECDC4", "#FFE66D", "#FF8C42", "#95E1D3", "#F38181",
-    "#AA96DA", "#FCBAD3", "#A8D8EA", "#FFD3B6", "#D5AACF",
 ])
 
 
 def draw_path(recon_bcsm, I_t_data, E_arr, choose, savepath, G, M, M1, K, K1):
+    """Draw and save a band path plot (M-G, K-G, or G-M-K-G)."""
     if choose == "M":
         path_pts = np.asarray([M, G, M1])
         n1 = int(math.sqrt((M[0]-G[0])**2 + (M[1]-G[1])**2))
@@ -49,8 +54,10 @@ def draw_path(recon_bcsm, I_t_data, E_arr, choose, savepath, G, M, M1, K, K1):
     prec = bpm(np.moveaxis(recon_bcsm, 0, 2), pathr=row_inds, pathc=col_inds, eaxis=2)
 
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.imshow(pathD, cmap="plasma", extent=[0, len(row_inds), E_arr[0], E_arr[-1]], aspect="auto", origin="lower")
-    for ib in range(min(prec.shape[0], len(BAND_COLORS))):
+    ax.imshow(pathD, cmap="plasma", extent=[0, len(row_inds), E_arr[0], E_arr[-1]],
+              aspect="auto", origin="lower")
+    n_bands = min(prec.shape[0], len(BAND_COLORS))
+    for ib in range(n_bands):
         ax.plot(savgol_filter(prec[ib, :], min(31, len(prec[ib])-2), min(2, len(prec[ib])//2-1)),
                 zorder=1, lw=2.3, color=BAND_COLORS[ib])
     ax.set(xlim=(0, len(row_inds)), ylim=(E_arr[0], E_arr[-1]))
@@ -66,14 +73,36 @@ def draw_path(recon_bcsm, I_t_data, E_arr, choose, savepath, G, M, M1, K, K1):
     plt.close()
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default=CONFIG_PATH, help="Config file path")
-    parser.add_argument("--exp_data", default=None, help="Preprocessed exp HDF5 (overrides config)")
-    parser.add_argument("--band_map", default=None, help="DFT band map .mat (overrides config)")
-    args = parser.parse_args()
+def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=None):
+    """Run the full MRF + BSFI reconstruction pipeline.
 
-    cfg = load_config(args.config)
+    Parameters
+    ----------
+    config_path : str or None
+        Path to config YAML. Defaults to configs/pimre_config.yaml.
+    exp_data : str or None
+        Path to preprocessed experimental HDF5 (overrides config).
+    band_map : str or None
+        Path to DFT band map .h5 (overrides config).
+    output_dir : str or None
+        Output directory (defaults to test/).
+
+    Returns
+    -------
+    recon : ndarray
+        Reconstructed bands (n_bands, nkx, nky).
+    final_params : list of dict
+        Per-band parameters.
+    """
+    if config_path is None:
+        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    "..", "..", "configs", "pimre_config.yaml")
+    if output_dir is None:
+        output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   "..", "..", "test")
+    os.makedirs(output_dir, exist_ok=True)
+
+    cfg = load_config(config_path)
     crystal = crystallographic_data(cfg)
     mrf_cfg = cfg["mrf"]
     bands_cfg = mrf_cfg["bands"]
@@ -88,10 +117,12 @@ def main():
     OFFSET_MODE = mrf_cfg["offset_mode"]
     smooth_sigma = mrf_cfg["smooth_sigma"]
 
-    exp_data = args.exp_data or cfg["preprocessing"]["output_path"]
-    band_map = args.band_map or os.path.join(TEST_DIR, "band_map.mat")
+    if exp_data is None:
+        exp_data = cfg["preprocessing"]["output_path"]
+    if band_map is None:
+        band_map = os.path.join(output_dir, "band_map.h5")
 
-    # STEP 1
+    # ── STEP 1: Load data ──
     print("=" * 60)
     print("STEP 1: Loading data")
     print("=" * 60)
@@ -113,25 +144,24 @@ def main():
     mrf.smoothenI(sigma=smooth_sigma)
     print(f"  Exp: E={E.shape}, kx={kx.shape}, ky={ky.shape}, I={I.shape}")
 
-    mat_data = sio.loadmat(band_map)
-    evb = mat_data["evb"][:]
-    ecb = mat_data["ecb"][:]
-    E_dft = np.nan_to_num(np.vstack((ecb[::-1, :, :], evb)))
-    E_dft = E_dft[33:]
-    if np.abs(np.sum(np.diff(mat_data["kxxsc"][:, 0]))) > np.abs(np.sum(np.diff(mat_data["kxxsc"][0, :]))):
-        ky_dft = mat_data["kxxsc"][:, 0]; kx_dft = mat_data["kyysc"][0, :]
-    else:
-        ky_dft = mat_data["kxxsc"][0, :]; kx_dft = mat_data["kyysc"][:, 0]
+    E_dft, evb, ecb, kx_dft, ky_dft = load_band_map_h5(band_map)
     print(f"  DFT: E_dft={E_dft.shape}, kx_dft={kx_dft.shape}, ky_dft={ky_dft.shape}")
 
-    # STEP 2
+    # ── STEP 2: HSPs, affine transform ──
     print("\n" + "=" * 60)
     print("STEP 2: HSPs, affine transform T, DFT mapping")
     print("=" * 60)
 
-    G, M, M1, K, K1, K2, K3, K4, K5 = Get_G_M_K(crystal, kx, ky)
+    calib = cfg["calibration"].get("hsps", {})
+    result = find_hsps_robust(I_t, kx, ky, crystal, E, calibration=calib)
+    hsps = result.hsps
+    G = hsps["G"]
+    M = hsps["M0"]
+    M1 = hsps["M3"]
+    K = hsps["K0"]
+    K1 = hsps["K3"]
     KP_dft_raw, MP_dft_raw = dft_KM(kx_dft, ky_dft)
-    print(f"  HSPs: G={G}, M={M}, K={K}")
+    print(f"  HSPs: G={G}, M={M}, K={K} (source={result.source})")
 
     T, T_inv, scale_x, scale_y, rotation_deg = compute_affine_transform(
         kx, ky, G, K, M, kx_dft, ky_dft, KP_dft_raw, MP_dft_raw)
@@ -147,13 +177,13 @@ def main():
     ratio_dft = np.linalg.norm(K_vec_dft) / np.linalg.norm(M_vec_dft)
     print(f"  |K|/|M|: exp={ratio_exp:.4f}, DFT={ratio_dft:.4f} (ideal=1.155)")
 
-    kx_dft_orig = kx_dft.copy(); ky_dft_orig = ky_dft.copy(); E_dft_orig = E_dft.copy()
+    E_dft_orig = E_dft.copy()
     print("  Mapping DFT bands via T_inv ...")
-    dft_bands = map_dft_bands(E_dft_orig, kx_dft_orig, ky_dft_orig, kx, ky, T_inv,
+    dft_bands = map_dft_bands(E_dft_orig, kx_dft, ky_dft, kx, ky, T_inv,
                               [b["index"] for b in bands_cfg])
     print(f"  {len(dft_bands)} DFT bands mapped")
 
-    # STEP 3
+    # ── STEP 3: BSFI offset search ──
     print("\n" + "=" * 60)
     print(f"STEP 3: BSFI offset search — mode={OFFSET_MODE}")
     print("=" * 60)
@@ -210,10 +240,10 @@ def main():
     ax2.set(ylim=(0,1), xlabel="Energy Offset (eV)", title="Stage 2: Per-band fine-tune")
     ax2.legend(fontsize=8, ncol=3); ax2.set_yticks([])
     plt.tight_layout()
-    fig.savefig(os.path.join(TEST_DIR, "bsfi_curve.png"), dpi=150, bbox_inches="tight")
+    fig.savefig(os.path.join(output_dir, "bsfi_curve.png"), dpi=150, bbox_inches="tight")
     plt.close()
 
-    # STEP 4
+    # ── STEP 4: Final MRF reconstruction ──
     print("\n" + "=" * 60)
     print("STEP 4: Final MRF reconstruction")
     print("=" * 60)
@@ -247,18 +277,19 @@ def main():
         })
         print(f"  Band {ind_band}: offset={final_offset:+.4f} eV, eta={eta}, BSFI={bsfi_b:.4f}")
 
-    np.save(os.path.join(TEST_DIR, "recon_bands.npy"), recon)
+    np.save(os.path.join(output_dir, "recon_bands.npy"), recon)
 
-    # STEP 5
+    # ── STEP 5: Path plots ──
     print("\n" + "=" * 60)
     print("STEP 5: Path plots")
     print("=" * 60)
-    draw_path(recon[:], I_t, E, "K", os.path.join(TEST_DIR, "path_KG.png"), G, M, M1, K, K1)
-    draw_path(recon[:], I_t, E, "M", os.path.join(TEST_DIR, "path_MG.png"), G, M, M1, K, K1)
-    draw_path(recon[:], I_t, E, "MK", os.path.join(TEST_DIR, "path_GMKG.png"), G, M, M1, K, K1)
+    draw_path(recon[:], I_t, E, "K", os.path.join(output_dir, "path_KG.png"), G, M, M1, K, K1)
+    draw_path(recon[:], I_t, E, "M", os.path.join(output_dir, "path_MG.png"), G, M, M1, K, K1)
+    draw_path(recon[:], I_t, E, "MK", os.path.join(output_dir, "path_GMKG.png"), G, M, M1, K, K1)
     print("  Saved path plots")
 
-    np.savez(os.path.join(TEST_DIR, "bsfi_scores.npz"),
+    # ── Save results ──
+    np.savez(os.path.join(output_dir, "bsfi_scores.npz"),
              offsets=offsets, scores_shared=scores_shared,
              best_shared_off=best_shared_off, best_offsets=best_offsets)
 
@@ -279,7 +310,7 @@ def main():
         "shared_bsfi": float(best_shared_score),
         "fine_tune_range": FINE_TUNE_RANGE,
     }
-    with open(os.path.join(TEST_DIR, "final_parameters.json"), "w") as f:
+    with open(os.path.join(output_dir, "final_parameters.json"), "w") as f:
         json.dump(save_data, f, indent=2)
 
     print("\n" + "=" * 60)
@@ -291,10 +322,8 @@ def main():
     for ib, p in enumerate(final_params):
         print(f"    Band {ib}: offset={p['offset']:.4f} eV, BSFI={p['bsfi_score']:.4f}")
     print(f"  Mean BSFI = {best_score:.4f}")
-    for f in sorted(os.listdir(TEST_DIR)):
-        sz = os.path.getsize(os.path.join(TEST_DIR, f))
+    for f in sorted(os.listdir(output_dir)):
+        sz = os.path.getsize(os.path.join(output_dir, f))
         print(f"  {f:40s} {sz:>12,d} bytes")
 
-
-if __name__ == "__main__":
-    main()
+    return recon, final_params

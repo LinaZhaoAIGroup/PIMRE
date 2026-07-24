@@ -332,23 +332,62 @@ def save_band_map_mat(filepath, evb, ecb, kx_grid, ky_grid):
 
 
 def save_band_map_h5(filepath, evb, ecb, kx_grid, ky_grid):
-    """Save band map as HDF5 file.
+    """Save band map as HDF5 file with 1D kx/ky axes.
 
     Parameters
     ----------
     filepath : str
         Output file path.
     evb, ecb : ndarray
-        Valence and conduction band data.
+        Valence and conduction band data (n_bands, nkx, nky).
     kx_grid, ky_grid : ndarray
-        kx and ky grid arrays.
+        2D kx and ky grid arrays. First row/column is extracted as 1D axes.
     """
     import h5py
 
+    if kx_grid.ndim == 2:
+        kx = kx_grid[:, 0] if np.abs(np.sum(np.diff(kx_grid[:, 0]))) > 0 else kx_grid[0, :]
+    else:
+        kx = kx_grid
+    if ky_grid.ndim == 2:
+        ky = ky_grid[0, :] if np.abs(np.sum(np.diff(kx_grid[:, 0]))) > 0 else ky_grid[:, 0]
+    else:
+        ky = ky_grid
+
     with h5py.File(filepath, "w") as f:
         axes_group = f.create_group("axes")
-        axes_group.create_dataset("kxxsc", data=kx_grid)
-        axes_group.create_dataset("kyysc", data=ky_grid)
+        axes_group.create_dataset("kx", data=kx)
+        axes_group.create_dataset("ky", data=ky)
         bands_group = f.create_group("bands")
         bands_group.create_dataset("evb", data=evb)
         bands_group.create_dataset("ecb", data=ecb)
+
+
+def load_band_map_h5(filepath):
+    """Load band map from HDF5 file.
+
+    Parameters
+    ----------
+    filepath : str
+        Path to band_map.h5.
+
+    Returns
+    -------
+    E_dft : ndarray
+        Stacked band structure (n_bands, nkx, nky).
+    evb, ecb : ndarray
+        Valence and conduction band data.
+    kx, ky : 1D array
+        kx and ky axes.
+    """
+    import h5py
+
+    with h5py.File(filepath, "r") as f:
+        evb = np.nan_to_num(f["bands/evb"][:])
+        ecb = np.nan_to_num(f["bands/ecb"][:])
+        kx = f["axes/kx"][:]
+        ky = f["axes/ky"][:]
+
+    E_dft = np.vstack((ecb[::-1], evb))
+    E_dft = E_dft[33:]
+    return E_dft, evb, ecb, kx, ky

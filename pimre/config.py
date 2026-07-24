@@ -100,6 +100,11 @@ DEFAULTS = {
     "calibration": {
         "kx_shift": 0.0, "ky_shift": 0.0,
         "kx_grid_shift": 0.0, "ky_grid_shift": 0.0,
+        "hsps": {
+            "manual": False,
+            "rotation_angle": 0.0,
+            "scale": 1.0,
+        },
     },
     "preprocessing": {
         "output_grid": 200,

@@ -18,6 +18,10 @@ arpes:
   path: /home/dengxw/ARPES/mapping/data/theory/dataCliu.h5
   work_function: 16.03
 calibration:
+  hsps:
+    manual: true
+    rotation_angle: 30.0
+    scale: 0.79
   kx_grid_shift: 0.0
   kx_shift: 0.05150417962962628
   ky_grid_shift: 1.1102230246251565e-16

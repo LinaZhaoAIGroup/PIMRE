@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+title: "PIMRE: Physics-Informed Markov Random Field for ARPES Band Reconstruction"
+message: "If you use PIMRE in your research, please cite it as follows."
+type: software
+authors:
+  - name: "PIMRE contributors"
+repository-code: "https://github.com/LinaZhaoAIGroup/PIMRE"
+url: "https://github.com/LinaZhaoAIGroup/PIMRE"
+license: LGPL-2.1
+version: 0.1.0
+date-released: 2024-07-24
