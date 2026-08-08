@@ -127,7 +127,7 @@ def register_bz(intensity_slice, kx, ky, crystal_data, G,
     return float(best_theta), float(best_score)
 
 
-def build_hsps_from_registration(crystal_data, kx, ky, G, theta):
+def build_hsps_from_registration(crystal_data, kx, ky, G, theta, scale=1.0):
     """Build K and M points from registration angle and lattice parameters.
 
     K points are at |Γ-K| distance along the 6 K-K directions.
@@ -144,6 +144,9 @@ def build_hsps_from_registration(crystal_data, kx, ky, G, theta):
         Gamma point grid index.
     theta : float
         K-K line angle in degrees.
+    scale : float
+        Multiplicative scale applied to the |Γ-K| and |Γ-M| distances
+        (calibrated against the experimental BZ size).
 
     Returns
     -------
@@ -155,8 +158,8 @@ def build_hsps_from_registration(crystal_data, kx, ky, G, theta):
     k_K, k_M = lattice_to_reciprocal(*crystal_data)
     G_kx, G_ky = kx[G[0]], ky[G[1]]
 
-    K_dist = float(np.linalg.norm(k_K[:2]))
-    M_dist = float(np.linalg.norm(k_M[:2]))
+    K_dist = float(np.linalg.norm(k_K[:2])) * scale
+    M_dist = float(np.linalg.norm(k_M[:2])) * scale
 
     theta_rad = np.deg2rad(theta)
     K_points = []

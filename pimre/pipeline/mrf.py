@@ -12,19 +12,22 @@ import json
 import math
 import os
 
-import numpy as np
 import matplotlib
+import numpy as np
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from scipy.signal import savgol_filter
 
-from pimre.config import load_config, crystallographic_data
-from pimre.utils.io import loadHDF
-from pimre.mrf.model import MrfRec
-from pimre.mrf.evaluation import compute_bsfi_2d, compute_affine_transform, map_dft_bands
+from pimre.config import crystallographic_data, load_config
 from pimre.dft.reader import load_band_map_h5
-from pimre.kpath.symmetry import find_hsps_robust, dft_KM
-from pimre.kpath.path import points2path, bandpath_map as bpm
+from pimre.kpath.path import bandpath_map as bpm
+from pimre.kpath.path import points2path
+from pimre.kpath.symmetry import dft_KM, find_hsps_robust
+from pimre.mrf.evaluation import compute_affine_transform, compute_bsfi_2d, map_dft_bands
+from pimre.mrf.model import MrfRec
+from pimre.mrf.symmetry import sym_band
+from pimre.utils.io import loadHDF
 
 BAND_COLORS = np.array([
     "#FF6B6B", "#B39DDB", "#DA70D6", "#FF4D4D", "#8A2BE2",
@@ -58,7 +61,13 @@ def draw_path(recon_bcsm, I_t_data, E_arr, choose, savepath, G, M, M1, K, K1):
               aspect="auto", origin="lower")
     n_bands = min(prec.shape[0], len(BAND_COLORS))
     for ib in range(n_bands):
-        ax.plot(savgol_filter(prec[ib, :], min(31, len(prec[ib])-2), min(2, len(prec[ib])//2-1)),
+        window = min(31, len(prec[ib]) - 2)
+        if window < 3:
+            window = 3
+        if window % 2 == 0:
+            window -= 1
+        polyorder = min(2, max(1, window // 2 - 1))
+        ax.plot(savgol_filter(prec[ib, :], window, polyorder),
                 zorder=1, lw=2.3, color=BAND_COLORS[ib])
     ax.set(xlim=(0, len(row_inds)), ylim=(E_arr[0], E_arr[-1]))
     ax.set_xticks(path_inds)
@@ -108,6 +117,7 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
     bands_cfg = mrf_cfg["bands"]
     bsfi_cfg = mrf_cfg["bsfi"]
     N_BANDS = len(bands_cfg)
+    NUM_EPOCHS = mrf_cfg.get("num_epochs", 10)
     BSFI_OFFSET_RANGE = bsfi_cfg["offset_range"]
     BSFI_OFFSET_STEP = bsfi_cfg["offset_step"]
     FINE_TUNE_RANGE = bsfi_cfg["fine_tune_range"]
@@ -144,7 +154,8 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
     mrf.smoothenI(sigma=smooth_sigma)
     print(f"  Exp: E={E.shape}, kx={kx.shape}, ky={ky.shape}, I={I.shape}")
 
-    E_dft, evb, ecb, kx_dft, ky_dft = load_band_map_h5(band_map)
+    E_dft, evb, ecb, kx_dft, ky_dft = load_band_map_h5(
+        band_map, drop_top_bands=cfg.get("dft", {}).get("drop_top_bands"))
     print(f"  DFT: E_dft={E_dft.shape}, kx_dft={kx_dft.shape}, ky_dft={ky_dft.shape}")
 
     # ── STEP 2: HSPs, affine transform ──
@@ -245,7 +256,7 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
 
     # ── STEP 4: Final MRF reconstruction ──
     print("\n" + "=" * 60)
-    print("STEP 4: Final MRF reconstruction")
+    print(f"STEP 4: Final MRF reconstruction ({NUM_EPOCHS} epochs)")
     print("=" * 60)
 
     recon = -np.ones((N_BANDS, len(mrf.kx), len(mrf.ky)))
@@ -258,17 +269,12 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
         E0 = np.reshape(dft_bands[ind_band] + final_offset, (kx.shape[0], ky.shape[0]))
         EE, EE0 = np.meshgrid(E, E0)
         mrf.indEb = np.argmin(np.abs(EE - EE0), 1).reshape(E0.shape)
+        mrf.delHist()
+        mrf.iter_para(num_epoch=NUM_EPOCHS, updateLogP=True, disable_tqdm=True)
         recon[ind_band] = mrf.getEb()
-        bsfi_b = compute_bsfi_2d(E0, I_t, E, w_corr=W_CORR, w_int=W_INT, w_snr=W_SNR)
+        bsfi_b = compute_bsfi_2d(recon[ind_band], I_t, E, w_corr=W_CORR, w_int=W_INT, w_snr=W_SNR)
 
-        indXRef = np.min(np.where(mrf.kx > 0.0)[0])
-        lIndX = np.min([indXRef, mrf.lengthKx - indXRef])
-        indX = np.arange(indXRef - lIndX, indXRef + lIndX)
-        recon[ind_band, indX, :] = (recon[ind_band, indX, :] + recon[ind_band, np.flip(indX, axis=0), :]) / 2
-        indYRef = np.min(np.where(mrf.ky > 0.0)[0])
-        lIndY = np.min([indYRef, mrf.lengthKy - indYRef])
-        indY = np.arange(indYRef - lIndY, indYRef + lIndY)
-        recon[ind_band, :, indY] = (recon[ind_band, :, indY] + recon[ind_band, :, np.flip(indY, axis=0)]) / 2
+        sym_band(ind_band, recon, mrf.kx, mrf.ky, mrf.lengthKx, mrf.lengthKy)
 
         final_params.append({
             "band": ind_band, "dft_band": ind_band*2,

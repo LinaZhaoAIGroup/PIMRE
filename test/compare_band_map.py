@@ -20,7 +20,7 @@ from matplotlib.widgets import RadioButtons, Slider
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from pimre.dft.reader import load_band_map_h5
-from pimre.kpath.symmetry import dft_KM, _rotate_around_center
+from pimre.kpath.symmetry import _rotate_around_center, dft_KM
 
 
 def load_band_map(filepath):
@@ -45,7 +45,6 @@ def load_band_map(filepath):
         kx = kyy[:, 0]
 
     E_dft = np.vstack((ecb[::-1], evb))
-    E_dft = E_dft[33:]
     return E_dft, evb, ecb, kx, ky
 
 
@@ -115,7 +114,7 @@ def main():
           f"kx=[{kx2[0]:.4f}, {kx2[-1]:.4f}], ky=[{ky2[0]:.4f}, {ky2[-1]:.4f}]")
 
     n_bands = max(E1.shape[0], E2.shape[0])
-    print(f"  Stacked bands (after evb+ecb[::-1], slice [33:]): {n_bands}")
+    print(f"  Stacked bands (evb + ecb[::-1]): {n_bands}")
 
     hsps1 = compute_dft_hsps(kx1, ky1)
     hsps2 = compute_dft_hsps(kx2, ky2)

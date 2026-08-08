@@ -2,9 +2,9 @@
 
 import os
 import re
-import yaml
-import numpy as np
 
+import numpy as np
+import yaml
 
 # ── OUTCAR parser ──────────────────────────────────────────────────────
 

@@ -63,6 +63,9 @@ def lattice_to_reciprocal(a, b, c, alpha_deg, beta_deg, gamma_deg):
 def dft_KM(kx_dft, ky_dft):
     """Find K and M point indices in DFT k-grid.
 
+    The DFT momentum axes kx_dft/ky_dft are Cartesian (X, Y) coordinates;
+    the K and M points are matched component-wise.
+
     Parameters
     ----------
     kx_dft, ky_dft : 1D array
@@ -77,10 +80,10 @@ def dft_KM(kx_dft, ky_dft):
     MP = reciprocal_to_cartesian.dot(np.array([[0], [0.5]])).T
     KP = reciprocal_to_cartesian.dot(np.array([[1 / 3], [1 / 3]])).T
 
-    KP_x = np.argmin(np.abs(kx_dft - KP[0, 1]))
-    KP_y = np.argmin(np.abs(ky_dft - KP[0, 0]))
-    MP_x = np.argmin(np.abs(kx_dft - MP[0, 1]))
-    MP_y = np.argmin(np.abs(ky_dft - MP[0, 0]))
+    KP_x = np.argmin(np.abs(kx_dft - KP[0, 0]))
+    KP_y = np.argmin(np.abs(ky_dft - KP[0, 1]))
+    MP_x = np.argmin(np.abs(kx_dft - MP[0, 0]))
+    MP_y = np.argmin(np.abs(ky_dft - MP[0, 1]))
     return (KP_x, KP_y), (MP_x, MP_y)
 
 
@@ -249,27 +252,6 @@ def _find_best_energy_layer(intensity, n_samples=20):
     return int(best_layer), best_score
 
 
-def _adaptive_mindist(crystal_data, kx):
-    """Compute mindist for peak detection from lattice parameters.
-
-    Parameters
-    ----------
-    crystal_data : list
-        [a, b, c, alpha, beta, gamma].
-    kx : 1D array
-        kx axis for pixel-to-momentum conversion.
-
-    Returns
-    -------
-    mindist : int
-        Minimum distance between peaks in pixels.
-    """
-    k_K, _ = lattice_to_reciprocal(*crystal_data)
-    k_K_dist = float(np.linalg.norm(k_K))
-    kx_step = float(np.abs(kx[1] - kx[0])) if len(kx) > 1 else 0.01
-    mindist = max(10, int(k_K_dist / kx_step * 0.5))
-    return mindist
-
 
 def find_hsps_robust(intensity, kx, ky, crystal_data, E_grid=None, calibration=None):
     """Robust high-symmetry point finding.
@@ -297,7 +279,7 @@ def find_hsps_robust(intensity, kx, ky, crystal_data, E_grid=None, calibration=N
     HspsResult
         Dataclass with hsps dict, confidence, registration info.
     """
-    from ..kpath.registration import register_bz, build_hsps_from_registration
+    from ..kpath.registration import build_hsps_from_registration, register_bz
 
     G, _, _ = Get_G_M_K(crystal_data, kx, ky)
 
@@ -314,8 +296,9 @@ def find_hsps_robust(intensity, kx, ky, crystal_data, E_grid=None, calibration=N
         )
         source = "theory" if reg_score < 0.1 else "registered"
 
+    scale = float(calibration.get("scale", 1.0)) if calibration else 1.0
     K_points, M_points = build_hsps_from_registration(
-        crystal_data, kx, ky, G, theta,
+        crystal_data, kx, ky, G, theta, scale=scale,
     )
 
     hsps = _build_hsps_dict(G, K_points, M_points)
@@ -329,6 +312,6 @@ def find_hsps_robust(intensity, kx, ky, crystal_data, E_grid=None, calibration=N
         best_layer=best_layer,
         cv_errors={},
         rotation_angle=theta,
-        scale=1.0,
+        scale=scale,
         registration_score=reg_score,
     )

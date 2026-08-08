@@ -3,114 +3,16 @@
 Replicates the pipeline from 2.exp_data_pre.ipynb.
 """
 
-import re
-import numpy as np
 import h5py
-from scipy.constants import hbar, m_e, electron_volt
+import numpy as np
+from scipy.constants import electron_volt, hbar, m_e
 from scipy.interpolate import griddata
-from scipy.spatial import KDTree
-
-
-# --- Parameter extraction ---
-
-
-def extract_wave_params(WAVE_INFO, EXP_INFO=None):
-    """Extract wave parameters from WAVE_INFO text.
-
-    Parameters
-    ----------
-    WAVE_INFO : str
-        Wave information text with Rows, Columns, Layers metadata.
-    EXP_INFO : dict or None
-        Experiment information (optional).
-
-    Returns
-    -------
-    Range : dict
-        Dictionary with E_range, kx_range, ky_range.
-    """
-    def extract_param(pattern, text):
-        match = re.search(pattern, text)
-        if match:
-            return float(match.group(1)), float(match.group(2)), float(match.group(3))
-        return None
-
-    rows = extract_param(r"Rows:\s*(\d+)\s*Start:\s*([-\d.]+)\s*Delta:\s*([-\d.]+)", WAVE_INFO)
-    columns = extract_param(r"Columns:\s*(\d+)\s*Start:\s*([-\d.]+)\s*Delta:\s*([-\d.]+)", WAVE_INFO)
-    layers = extract_param(r"Layers:\s*(\d+)\s*Start:\s*([-\d.]+)\s*Delta:\s*([-\d.]+)", WAVE_INFO)
-
-    Range = {
-        "E_range": (
-            rows[1],
-            rows[1] + rows[2] * rows[0],
-        ),
-        "kx_range": (
-            columns[1],
-            columns[1] + columns[2] * columns[0],
-        ),
-        "ky_range": (
-            layers[1],
-            layers[1] + layers[2] * layers[0],
-        ),
-    }
-    return Range
-
-
-# --- Data loading ---
-
-
-def load_exp_data(filepath, wave_name):
-    """Load experimental HDF5 data.
-
-    Parameters
-    ----------
-    filepath : str
-        Path to the HDF5 file.
-    wave_name : str
-        Name of the wave group in the HDF5 file.
-
-    Returns
-    -------
-    bands : ndarray
-        3D array of intensity data (E, kx, ky).
-    """
-    with h5py.File(filepath, "r") as f:
-        bands = f[wave_name][:]
-    return bands
-
-
-def load_exp_data_from_h5(filepath, axes_key="axes", intensity_key="intensity"):
-    """Load preprocessed experimental data from HDF5.
-
-    Parameters
-    ----------
-    filepath : str
-        Path to HDF5 file.
-    axes_key : str
-        Key for axes group.
-    intensity_key : str
-        Key for intensity group.
-
-    Returns
-    -------
-    E_grid : ndarray
-        Energy grid.
-    kx : ndarray
-        kx axis.
-    ky : ndarray
-        ky axis.
-    E_Mon : ndarray
-        3D intensity data.
-    """
-    with h5py.File(filepath, "r") as f:
-        E_grid = f[axes_key]["E"][:]
-        kx = f[axes_key]["kx"][:]
-        ky = f[axes_key]["ky"][:]
-        E_Mon = f[intensity_key]["V"][:]
-    return E_grid, kx, ky, E_Mon
-
+from scipy.spatial import cKDTree
 
 # --- Angle to momentum conversion ---
+
+
+
 
 
 def Angle2Mon(E_grid, X_Angle, Y_Angle, X_Shift=0, Y_Shift=0, work_function=16.03):
@@ -155,82 +57,6 @@ def Angle2Mon(E_grid, X_Angle, Y_Angle, X_Shift=0, Y_Shift=0, work_function=16.0
     return KX, KY
 
 
-def Angle2MonGrid(E_grid, alpha, beta, theta, work_function=16.03):
-    """Convert angles to momentum space using alpha, beta, theta grid.
-
-    Parameters
-    ----------
-    E_grid : 1D array
-        Energy grid.
-    alpha, beta, theta : 1D array
-        Angle arrays in degrees.
-    work_function : float
-        Work function in eV.
-
-    Returns
-    -------
-    KX, KY : ndarray
-        3D momentum arrays.
-    """
-    E_kinetic = (work_function - E_grid) * electron_volt
-    K_norm = np.sqrt(2 * m_e * E_kinetic) / (1e10 * hbar)
-    K_norm = K_norm[:, np.newaxis, np.newaxis]
-
-    alpha = np.deg2rad(alpha)
-    beta = np.deg2rad(beta)
-    theta = np.deg2rad(theta)
-
-    sin_alpha = np.sin(alpha)[np.newaxis, np.newaxis, :]
-    cos_alpha = np.cos(alpha)[np.newaxis, np.newaxis, :]
-    sin_beta = np.sin(beta)[np.newaxis, np.newaxis, :]
-    cos_beta = np.cos(beta)[np.newaxis, np.newaxis, :]
-    sin_theta = np.sin(theta)[np.newaxis, :, np.newaxis]
-    cos_theta = np.cos(theta)[np.newaxis, :, np.newaxis]
-
-    KX = K_norm * (cos_beta * sin_alpha + sin_beta * cos_alpha * cos_theta)
-    KY = K_norm * sin_theta * cos_alpha
-    return KX, KY
-
-
-# --- Single layer conversion ---
-
-
-def SingleLayerConversion(bands, KX, KY, kx_dim, ky_dim, layer_index=0, method="cubic"):
-    """Interpolate a single layer of band data onto a regular kx/ky grid.
-
-    Parameters
-    ----------
-    bands : ndarray
-        3D intensity data (E, kx_angle, ky_angle).
-    KX, KY : ndarray
-        3D momentum coordinate arrays.
-    kx_dim, ky_dim : int
-        Output grid dimensions.
-    layer_index : int
-        Energy layer index to process.
-    method : str
-        Interpolation method ('cubic', 'linear', 'nearest').
-
-    Returns
-    -------
-    E_Mon : ndarray
-        2D interpolated intensity for the layer.
-    kx, ky : ndarray
-        kx and ky grid axes.
-    """
-    kx = np.linspace(np.min(KX), np.max(KX), kx_dim)
-    ky = np.linspace(np.min(KY), np.max(KY), ky_dim)
-
-    E_Mon = griddata(
-        np.column_stack((KX[layer_index].ravel(), KY[layer_index].ravel())),
-        bands[layer_index].ravel(),
-        (kx[:, None], ky[None, :]),
-        method=method,
-    )
-    return E_Mon, kx, ky
-
-
-# --- KD-Tree interpolation ---
 
 
 def KDInterp(bands, KX, KY, radius=0.05, kx_grid=None, ky_grid=None):
@@ -255,8 +81,8 @@ def KDInterp(bands, KX, KY, radius=0.05, kx_grid=None, ky_grid=None):
     points_source = np.vstack((KX.ravel(), KY.ravel())).T
     values_source = bands.ravel()
 
-    tree = KDTree(points_source)
-    neighbors_indices = tree.query_ball_point(points_source, r=radius)
+    tree = cKDTree(points_source)
+    neighbors_indices = tree.query_ball_point(points_source, r=radius, return_sorted=False)
 
     new_points = []
     new_values = []
@@ -312,46 +138,6 @@ def RotateCoordinates(KX, KY, theta=60, KX_Shift=0, KY_Shift=0):
 
 # --- Multi-layer expansion ---
 
-
-def expand_all_layers(bands, KX, KY, KX_Shift=0, KY_Shift=0, n_rotations=6):
-    """Expand experimental data by rotating all layers.
-
-    Parameters
-    ----------
-    bands : ndarray
-        3D intensity data (E, kx_angle, ky_angle).
-    KX, KY : ndarray
-        3D momentum coordinate arrays.
-    KX_Shift, KY_Shift : float
-        Center of rotation.
-    n_rotations : int
-        Number of rotational copies.
-
-    Returns
-    -------
-    KX_Rotated, KY_Rotated : ndarray
-        Concatenated rotated coordinates.
-    bands_repeated : ndarray
-        Repeated bands for all rotations.
-    """
-    bands_repeated = np.repeat(bands[:, :, np.newaxis], n_rotations, axis=2)
-    bands_repeated = bands_repeated.reshape(bands.shape[0], bands.shape[1], bands.shape[2] * n_rotations)
-
-    KX_Rotated = np.zeros((KX.shape[0], KX.shape[1], KX.shape[2] * n_rotations))
-    KY_Rotated = np.zeros_like(KX_Rotated)
-
-    KX_Rotated[:, :, : KX.shape[2]] = KX
-    KY_Rotated[:, :, : KY.shape[2]] = KY
-
-    for i in range(1, n_rotations):
-        KX_rot, KY_rot = RotateCoordinates(KX, KY, theta=60 * i, KX_Shift=KX_Shift, KY_Shift=KY_Shift)
-        KX_Rotated[:, :, i * KX.shape[2] : (i + 1) * KX.shape[2]] = KX_rot
-        KY_Rotated[:, :, i * KY.shape[2] : (i + 1) * KY.shape[2]] = KY_rot
-
-    return KX_Rotated, KY_Rotated, bands_repeated
-
-
-# --- Save preprocessed data ---
 
 
 def save_preprocessed_h5(filepath, E_grid, kx, ky, E_Mon):

@@ -181,7 +181,9 @@ class CalibrateHspsWindow(QtWidgets.QMainWindow):
     def _load_data(self):
         if self.mode == "dft":
             if self.band_map_path.endswith(".h5"):
-                E_dft, evb, ecb, kx, ky = load_band_map_h5(self.band_map_path)
+                E_dft, evb, ecb, kx, ky = load_band_map_h5(
+                    self.band_map_path,
+                    drop_top_bands=self.cfg.get("dft", {}).get("drop_top_bands"))
             else:
                 # Legacy .mat fallback
                 from test.compare_band_map import load_band_map as _load_mat

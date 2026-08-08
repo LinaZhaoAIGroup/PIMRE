@@ -12,17 +12,18 @@ import argparse
 import os
 import sys
 
-import numpy as np
 import h5py
 import matplotlib
+import numpy as np
+
 matplotlib.use("Qt5Agg")
 import matplotlib.pyplot as plt
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from pimre.config import load_config, save_config
+from pimre.experiment.calibration import KDInterp
 from pimre.gui.calibration import GammaCalibrator, GridCalibrator
 from pimre.pipeline.preprocess import compute_grid, preprocess_full
-from pimre.experiment.calibration import KDInterp
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            "..", "configs", "pimre_config.yaml")
@@ -73,7 +74,7 @@ def main():
 
     if not args.skip_calib:
         kxm, kym = np.meshgrid(kx_out, ky_out, indexing="ij")
-        print(f"  KD-interp 1 layer for calibration ...")
+        print("  KD-interp 1 layer for calibration ...")
         E_temp = KDInterp(bands_rep[10], KX_rot[10], KY_rot[10],
                           radius=cfg["preprocessing"]["kd_radius"],
                           kx_grid=kxm, ky_grid=kym)

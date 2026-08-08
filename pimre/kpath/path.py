@@ -3,7 +3,6 @@
 Extracted from mpes.analysis, ArpesBandRecons.CoordTrans, and 4.mrf.ipynb.
 """
 
-import math
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 

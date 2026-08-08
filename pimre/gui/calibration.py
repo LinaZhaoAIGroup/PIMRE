@@ -1,11 +1,12 @@
 """Interactive calibration widgets for Angle and Momentum space."""
 
 import matplotlib
+
 matplotlib.use("Qt5Agg")
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider
 
-from pimre.utils.interaction import DraggableVLine, DraggableHLine
+from pimre.utils.interaction import DraggableHLine, DraggableVLine
 
 
 class GammaCalibrator:

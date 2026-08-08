@@ -14,21 +14,22 @@ import os
 import sys
 
 import matplotlib
+
 matplotlib.use("Qt5Agg")
-import matplotlib.pyplot as plt
+import h5py
+import numpy as np
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-import numpy as np
-import h5py
-
-from PyQt5 import QtCore, QtWidgets
+from PyQt5 import QtWidgets
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from pimre.config import (
-    DEFAULTS, load_config, save_config, crystallographic_data,
-    parse_outcar, parse_kpoints,
+    load_config,
+    parse_kpoints,
+    parse_outcar,
+    save_config,
 )
-from pimre.utils.interaction import DraggableVLine, DraggableHLine
+from pimre.utils.interaction import DraggableHLine, DraggableVLine
 
 DEFAULT_CONFIG_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "configs", "pimre_config.yaml"

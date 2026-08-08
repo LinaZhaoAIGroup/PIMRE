@@ -29,6 +29,7 @@ calibration:
 dft:
   csv_file: extracted_data.csv
   fermi_file: BAND_GAP
+  drop_top_bands: 33
   k_grid:
   - 20
   - 20
@@ -44,6 +45,7 @@ lattice:
   c: 9.1297
   gamma: 120.0
 mrf:
+  num_epochs: 10
   bands:
   - index: 0
     k_scale: 1.24

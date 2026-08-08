@@ -4,10 +4,10 @@ Replicates the pipeline from 1.Calu_Data_Processing.ipynb.
 """
 
 import re
+
 import numpy as np
 import scipy.io as sio
 from scipy.interpolate import griddata
-
 
 # --- Coordinate transforms ---
 
@@ -56,6 +56,9 @@ def read_fermi_energy(filepath):
 def read_band_gap(filepath):
     """Read Fermi energy, VBM and CBM band indices from BAND_GAP file.
 
+    VBM/CBM indices are returned 0-based (BAND_GAP files written by VASPKIT
+    use 1-based indices consistent with EIGENVAL, so 1 is subtracted here).
+
     Parameters
     ----------
     filepath : str
@@ -65,47 +68,40 @@ def read_band_gap(filepath):
     -------
     fermi_energy : float
         Fermi energy in eV.
-    vbm_index : int
-        Valence band maximum band index.
-    cbm_index : int
-        Conduction band minimum band index.
+    vbm_index : int or None
+        Valence band maximum band index (0-based).
+    cbm_index : int or None
+        Conduction band minimum band index (0-based).
     """
     with open(filepath) as f:
         text = f.read()
 
     fermi_energy = None
-    fermi_index = text.find("Fermi Energy (eV)")
-    if fermi_index != -1:
-        start_index = fermi_index + len("Fermi Energy (eV):")
-        end_index = start_index
-        while text[end_index].isspace() or text[end_index].isdigit() or text[end_index] == "." or text[end_index] == "-":
-            end_index += 1
-        fermi_energy = float(text[start_index:end_index].strip())
+    match = re.search(r"Fermi Energy \(eV\)\s*[:=]?\s*([-+]?\d*\.?\d+)", text)
+    if match:
+        fermi_energy = float(match.group(1))
 
     vbm_index = None
     cbm_index = None
-    vbm_cbm_indexes_index = text.find("Band Indexes of VBM & CBM:")
-    if vbm_cbm_indexes_index != -1:
-        start_index = vbm_cbm_indexes_index + len("Band Indexes of VBM & CBM:")
-        numbers = []
-        while True:
-            number = ""
-            while text[start_index].isspace():
-                start_index += 1
-            while text[start_index].isdigit():
-                number += text[start_index]
-                start_index += 1
-            if number:
-                numbers.append(int(number))
-            if text[start_index] != " ":
-                break
-        vbm_index, cbm_index = numbers
+    match = re.search(r"Band Indexes of VBM & CBM\s*[:=]?\s*(\d+)\s+(\d+)", text)
+    if match:
+        vbm_index = int(match.group(1)) - 1
+        cbm_index = int(match.group(2)) - 1
 
     return fermi_energy, vbm_index, cbm_index
 
 
 def read_dft_csv(filepath, fermi_energy, nkx=20, nky=20):
-    """Read DFT band structure data from CSV and reshape to (nkx, nky, nbands).
+    """Read DFT band structure data from CSV.
+
+    The CSV is expected to contain k-point coordinates (kx, ky, kz) followed
+    by band energies per row, either comma-separated or with mixed
+    whitespace/comma delimiters. The kz column and any all-NaN columns are
+    dropped; the first row (usually the Gamma point) is kept.
+
+    If the number of rows matches a regular nkx × nky grid the bands are
+    reshaped to (nkx, nky, nbands); otherwise (scattered k-points) the bands
+    are returned as-is.
 
     Parameters
     ----------
@@ -114,31 +110,56 @@ def read_dft_csv(filepath, fermi_energy, nkx=20, nky=20):
     fermi_energy : float
         Fermi energy to subtract from band energies.
     nkx, nky : int
-        Number of k-points along kx and ky.
+        Number of k-points along kx and ky (used only for grid detection).
 
     Returns
     -------
     cartesian_coords : ndarray
         Cartesian coordinates of k-points (nk, 2).
+    energy_bands : ndarray
+        Energy bands (nk, nbands), Fermi-shifted.
     ebands : ndarray
-        Energy bands reshaped to (nkx, nky, nbands).
+        Energy bands reshaped to (nkx, nky, nbands) for regular grids,
+        otherwise the same array as energy_bands.
     """
-    import pandas as pd
-
-    df = pd.read_csv(filepath, header=None)
-    reciprocal_coords = df.iloc[:, :3].astype(float).drop(columns=[2])
+    df = _read_csv_mixed(filepath)
+    reciprocal_coords = df.iloc[:, :3].astype(float)
     M = reciprocal_to_cartesian_matrix()
-    cartesian_coords = M.dot(reciprocal_coords.T).T
+    cartesian_coords = M.dot(reciprocal_coords.values[:, :2].T).T
 
-    energy_bands = df.iloc[:, 1:].values - float(fermi_energy)
+    energy_bands = df.iloc[:, 3:].values - float(fermi_energy)
     energy_bands = energy_bands[:, ~np.all(np.isnan(energy_bands), axis=0)]
 
-    combined = np.concatenate((cartesian_coords, energy_bands), axis=1)
-    combined = combined[1:]  # Skip first row (gamma point duplicate)
-    nk = nkx * nky
-    neb = combined.shape[1]
-    ebands = np.moveaxis(combined.reshape((nkx, nky, neb)), 0, 1)[:, :, :-1]
+    nk = cartesian_coords.shape[0]
+    neb = energy_bands.shape[1]
+    if nk == nkx * nky:
+        ebands = np.moveaxis(energy_bands.reshape((nkx, nky, neb)), 0, 1)
+    else:
+        ebands = energy_bands.copy()
     return cartesian_coords, energy_bands, ebands
+
+
+def _read_csv_mixed(filepath):
+    """Read a DFT CSV supporting comma and whitespace delimiters."""
+    import pandas as pd
+
+    try:
+        df = pd.read_csv(filepath, header=None)
+        if not _is_numeric(df.iloc[:, 0]):
+            raise ValueError
+        return df
+    except (ValueError, TypeError, pd.errors.ParserError):
+        df = pd.read_csv(filepath, header=None, sep=r"[\s,]+", engine="python")
+        return df
+
+
+def _is_numeric(series):
+    """Check whether a pandas Series can be converted to float."""
+    try:
+        series.astype(float)
+        return True
+    except (ValueError, TypeError):
+        return False
 
 
 # --- Brillouin zone expansion ---
@@ -252,10 +273,10 @@ def build_band_map_3d(bz_coords, energy_bands, n_x=70, n_y=70, n_plus=3, scaling
 
     for i in np.arange(min_x - n_plus * step_x, max_x + n_plus * step_x, step_x):
         x_end = i + scaling_factor * step_x
-        x_coord = x_end / 2
+        x_coord = (i + x_end) / 2
         for j in np.arange(min_y - n_plus * step_y, max_y + n_plus * step_y, step_y):
             y_end = j + scaling_factor * step_y
-            y_coord = y_end / 2
+            y_coord = (j + y_end) / 2
             mask = (
                 (bz_coords[:, 0] >= i)
                 & (bz_coords[:, 0] < x_end)
@@ -279,31 +300,6 @@ def build_band_map_3d(bz_coords, energy_bands, n_x=70, n_y=70, n_plus=3, scaling
     CARCOO = np.moveaxis(CARCOO, -1, 0)
     return BANDMAP, CARCOO
 
-
-# --- High-symmetry path extraction ---
-
-
-def extract_high_symmetry_path(ebands):
-    """Extract energy bands along the Gamma-M-K-Gamma path.
-
-    Parameters
-    ----------
-    ebands : ndarray
-        (nkx, nky, nbands) energy band data.
-
-    Returns
-    -------
-    high_symmetry_points : ndarray
-        (n_points, n_bands) energy along the path.
-    gamma1, m, k, gamma2 : int
-        Indices of high-symmetry points along the path.
-    """
-    high_symmetry_points = np.vstack((ebands[0, :, 2:], ebands[:, -1, 2:], ebands[-1, ::-1, 2:]))
-    gamma1 = 0
-    m = ebands[0, :, 2:].shape[0]
-    k = m + ebands[:, -1, 2:].shape[0]
-    gamma2 = high_symmetry_points.shape[0] - 1
-    return high_symmetry_points, gamma1, m, k, gamma2
 
 
 # --- Save utilities ---
@@ -350,7 +346,7 @@ def save_band_map_h5(filepath, evb, ecb, kx_grid, ky_grid):
     else:
         kx = kx_grid
     if ky_grid.ndim == 2:
-        ky = ky_grid[0, :] if np.abs(np.sum(np.diff(kx_grid[:, 0]))) > 0 else ky_grid[:, 0]
+        ky = ky_grid[0, :] if np.abs(np.sum(np.diff(ky_grid[0, :]))) > 0 else ky_grid[:, 0]
     else:
         ky = ky_grid
 
@@ -363,18 +359,22 @@ def save_band_map_h5(filepath, evb, ecb, kx_grid, ky_grid):
         bands_group.create_dataset("ecb", data=ecb)
 
 
-def load_band_map_h5(filepath):
+def load_band_map_h5(filepath, drop_top_bands=None):
     """Load band map from HDF5 file.
 
     Parameters
     ----------
     filepath : str
         Path to band_map.h5.
+    drop_top_bands : int or None
+        Number of highest-energy conduction bands to drop from the stacked
+        band structure. None (default) keeps all bands.
 
     Returns
     -------
     E_dft : ndarray
-        Stacked band structure (n_bands, nkx, nky).
+        Stacked band structure (n_bands, nkx, nky) in descending
+        Gamma-point energy order.
     evb, ecb : ndarray
         Valence and conduction band data.
     kx, ky : 1D array
@@ -389,5 +389,6 @@ def load_band_map_h5(filepath):
         ky = f["axes/ky"][:]
 
     E_dft = np.vstack((ecb[::-1], evb))
-    E_dft = E_dft[33:]
+    if drop_top_bands:
+        E_dft = E_dft[drop_top_bands:]
     return E_dft, evb, ecb, kx, ky

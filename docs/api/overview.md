@@ -25,7 +25,7 @@ DFT data processing.
 | `expand_bz(coords, bands)` | C6 rotation + reflection expansion |
 | `interpolate_to_grid(coords, bands)` | griddata interpolation to regular grid |
 | `save_band_map_h5(path, evb, ecb, kx, ky)` | Save band map as HDF5 |
-| `load_band_map_h5(path)` | Load band map from HDF5 |
+| `load_band_map_h5(path, drop_top_bands=None)` | Load band map from HDF5 (optionally drop top conduction bands) |
 
 ### `pimre.experiment`
 
