@@ -118,7 +118,6 @@ DEFAULTS = {
     },
     "mrf": {
         "num_epochs": 10,
-        "auto_band_select": True,
         "max_shift": 10,
         "bands": [
             {"index": 0, "k_scale": 1.24, "offset": 0.75, "eta": 0.05},

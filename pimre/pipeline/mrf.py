@@ -42,12 +42,12 @@ BAND_COLORS = np.array([
 
 def select_bands_in_window(E_dft, kx_dft, ky_dft, kx, ky, T_inv, band_indices,
                            E_win, margin=5):
-    """Choose, for each requested DFT band index, a neighboring band with
-    the highest fraction of pixels inside the experimental energy window.
+    """Report the fraction of each requested DFT band inside the
+    experimental energy window.
 
-    Bands whose dispersion lies mostly outside the measured energy range
-    cannot be constrained by the data; this remaps each configured index to
-    the closest well-covered band (deduplicated).
+    DFT band ordering is physical and must not be changed by alignment;
+    this function therefore only reports coverage (diagnostics) and never
+    remaps the band indices.
 
     Parameters
     ----------
@@ -64,30 +64,17 @@ def select_bands_in_window(E_dft, kx_dft, ky_dft, kx, ky, T_inv, band_indices,
     E_win : tuple (emin, emax)
         Experimental energy window.
     margin : int
-        Number of neighboring bands searched around each requested index.
+        Unused; kept for API compatibility.
 
     Returns
     -------
-    chosen : dict {requested_index: selected_index}
+    coverage : dict {band_index: fraction_in_window}
     """
-    nbands = E_dft.shape[0]
-    coverage = np.zeros(nbands)
-    for i in range(nbands):
+    coverage = {}
+    for i in band_indices:
         band = map_dft_bands(E_dft, kx_dft, ky_dft, kx, ky, T_inv, [i])[0]
-        coverage[i] = np.mean((band >= E_win[0]) & (band <= E_win[1]))
-
-    chosen = {}
-    used = set()
-    for t in band_indices:
-        lo, hi = max(0, t - margin), min(nbands - 1, t + margin)
-        candidates = sorted(range(lo, hi + 1),
-                            key=lambda i: (-coverage[i], abs(i - t)))
-        for c in candidates:
-            if c not in used:
-                chosen[t] = c
-                used.add(c)
-                break
-    return chosen
+        coverage[i] = float(np.mean((band >= E_win[0]) & (band <= E_win[1])))
+    return coverage
 
 
 def draw_path(recon_bcsm, I_t_data, E_arr, choose, savepath, G, M, M1, K, K1):
@@ -182,7 +169,6 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
     W_PATH_RIDGE = bsfi_cfg["weights"].get("path_ridge", 0.8)
     RIDGE_SIGMA = bsfi_cfg.get("ridge_sigma", 0.1)
     MAX_SHIFT = mrf_cfg.get("max_shift", 10)
-    AUTO_BAND_SELECT = mrf_cfg.get("auto_band_select", True)
     OFFSET_MODE = mrf_cfg["offset_mode"]
     smooth_sigma = mrf_cfg["smooth_sigma"]
 
@@ -249,18 +235,18 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
     print(f"  |K|/|M|: exp={ratio_exp:.4f}, DFT={ratio_dft:.4f} (ideal=1.155)")
 
     E_dft_orig = E_dft.copy()
-    requested_idx = [b["index"] for b in bands_cfg]
+    band_idx = [b["index"] for b in bands_cfg]
 
-    if AUTO_BAND_SELECT:
-        E_win = (E.min(), E.max())
-        chosen = select_bands_in_window(E_dft_orig, kx_dft, ky_dft, kx, ky,
-                                        T_inv, requested_idx, E_win)
-        band_idx = [chosen[t] for t in requested_idx]
-        print(f"  Auto band select (window {E_win[0]:.2f}..{E_win[1]:.2f} eV):")
-        for t, c in chosen.items():
-            print(f"    requested {t} → selected {c}")
-    else:
-        band_idx = list(requested_idx)
+    E_win = (E.min(), E.max())
+    coverage = select_bands_in_window(E_dft_orig, kx_dft, ky_dft, kx, ky,
+                                      T_inv, band_idx, E_win)
+    print(f"  Band coverage inside experimental window ({E_win[0]:.2f}..{E_win[1]:.2f} eV):")
+    for t, cov in coverage.items():
+        print(f"    band {t} (E_dft[{t}]): {100*cov:.1f}%  (band order kept)")
+    low = [t for t, cov in coverage.items() if cov < 0.90]
+    if low:
+        print(f"  Warning: bands {low} have <90% coverage inside the window; "
+              "their reconstruction is weakly constrained by the data.")
 
     print("  Mapping DFT bands via T_inv ...")
     dft_bands = map_dft_bands(E_dft_orig, kx_dft, ky_dft, kx, ky, T_inv, band_idx)
@@ -404,7 +390,6 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
         "bsfi_offset_range": [-BSFI_OFFSET_RANGE, BSFI_OFFSET_RANGE],
         "bsfi_offset_step": BSFI_OFFSET_STEP,
         "offset_mode": OFFSET_MODE,
-        "auto_band_select": AUTO_BAND_SELECT,
         "affine_T": [[float(T[0,0]), float(T[0,1])], [float(T[1,0]), float(T[1,1])]],
         "scale_x": float(scale_x), "scale_y": float(scale_y),
         "rotation_deg": float(rotation_deg),

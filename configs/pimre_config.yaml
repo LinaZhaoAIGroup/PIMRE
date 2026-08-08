@@ -46,7 +46,6 @@ lattice:
   gamma: 120.0
 mrf:
   num_epochs: 10
-  auto_band_select: true
   max_shift: 10
   bands:
   - index: 0
