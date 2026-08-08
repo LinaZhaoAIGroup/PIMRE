@@ -24,7 +24,12 @@ from pimre.dft.reader import load_band_map_h5
 from pimre.kpath.path import bandpath_map as bpm
 from pimre.kpath.path import points2path
 from pimre.kpath.symmetry import dft_KM, find_hsps_robust
-from pimre.mrf.evaluation import compute_affine_transform, compute_bsfi_2d, map_dft_bands
+from pimre.mrf.evaluation import (
+    compute_affine_transform,
+    compute_bsfi_2d,
+    map_dft_bands,
+    path_ridge_score,
+)
 from pimre.mrf.model import MrfRec
 from pimre.mrf.symmetry import sym_band
 from pimre.utils.io import loadHDF
@@ -33,6 +38,56 @@ BAND_COLORS = np.array([
     "#FF6B6B", "#B39DDB", "#DA70D6", "#FF4D4D", "#8A2BE2",
     "#4ECDC4", "#FFE66D", "#FF8C42", "#95E1D3", "#F38181",
 ])
+
+
+def select_bands_in_window(E_dft, kx_dft, ky_dft, kx, ky, T_inv, band_indices,
+                           E_win, margin=5):
+    """Choose, for each requested DFT band index, a neighboring band with
+    the highest fraction of pixels inside the experimental energy window.
+
+    Bands whose dispersion lies mostly outside the measured energy range
+    cannot be constrained by the data; this remaps each configured index to
+    the closest well-covered band (deduplicated).
+
+    Parameters
+    ----------
+    E_dft : 3D array
+        DFT band data (nbands, kx_dft, ky_dft).
+    kx_dft, ky_dft : 1D array
+        DFT momentum axes.
+    kx, ky : 1D array
+        Experimental momentum axes.
+    T_inv : 2×2 array
+        Inverse affine transform (exp → DFT).
+    band_indices : list of int
+        Requested DFT band indices.
+    E_win : tuple (emin, emax)
+        Experimental energy window.
+    margin : int
+        Number of neighboring bands searched around each requested index.
+
+    Returns
+    -------
+    chosen : dict {requested_index: selected_index}
+    """
+    nbands = E_dft.shape[0]
+    coverage = np.zeros(nbands)
+    for i in range(nbands):
+        band = map_dft_bands(E_dft, kx_dft, ky_dft, kx, ky, T_inv, [i])[0]
+        coverage[i] = np.mean((band >= E_win[0]) & (band <= E_win[1]))
+
+    chosen = {}
+    used = set()
+    for t in band_indices:
+        lo, hi = max(0, t - margin), min(nbands - 1, t + margin)
+        candidates = sorted(range(lo, hi + 1),
+                            key=lambda i: (-coverage[i], abs(i - t)))
+        for c in candidates:
+            if c not in used:
+                chosen[t] = c
+                used.add(c)
+                break
+    return chosen
 
 
 def draw_path(recon_bcsm, I_t_data, E_arr, choose, savepath, G, M, M1, K, K1):
@@ -120,10 +175,14 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
     NUM_EPOCHS = mrf_cfg.get("num_epochs", 10)
     BSFI_OFFSET_RANGE = bsfi_cfg["offset_range"]
     BSFI_OFFSET_STEP = bsfi_cfg["offset_step"]
-    FINE_TUNE_RANGE = bsfi_cfg["fine_tune_range"]
     W_CORR = bsfi_cfg["weights"]["correlation"]
     W_INT = bsfi_cfg["weights"]["intensity"]
     W_SNR = bsfi_cfg["weights"]["snr"]
+    W_RIDGE = bsfi_cfg["weights"].get("ridge", 0.0)
+    W_PATH_RIDGE = bsfi_cfg["weights"].get("path_ridge", 0.8)
+    RIDGE_SIGMA = bsfi_cfg.get("ridge_sigma", 0.1)
+    MAX_SHIFT = mrf_cfg.get("max_shift", 10)
+    AUTO_BAND_SELECT = mrf_cfg.get("auto_band_select", True)
     OFFSET_MODE = mrf_cfg["offset_mode"]
     smooth_sigma = mrf_cfg["smooth_sigma"]
 
@@ -150,7 +209,8 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
     else:
         I_t = np.transpose(I, (2, 0, 1))
 
-    mrf = MrfRec(E=E, kx=kx, ky=ky, I=np.transpose(I_t, (1, 2, 0)), eta=0.12)
+    mrf = MrfRec(E=E, kx=kx, ky=ky, I=np.transpose(I_t, (1, 2, 0)), eta=0.12,
+                 max_shift=MAX_SHIFT)
     mrf.smoothenI(sigma=smooth_sigma)
     print(f"  Exp: E={E.shape}, kx={kx.shape}, ky={ky.shape}, I={I.shape}")
 
@@ -189,9 +249,21 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
     print(f"  |K|/|M|: exp={ratio_exp:.4f}, DFT={ratio_dft:.4f} (ideal=1.155)")
 
     E_dft_orig = E_dft.copy()
+    requested_idx = [b["index"] for b in bands_cfg]
+
+    if AUTO_BAND_SELECT:
+        E_win = (E.min(), E.max())
+        chosen = select_bands_in_window(E_dft_orig, kx_dft, ky_dft, kx, ky,
+                                        T_inv, requested_idx, E_win)
+        band_idx = [chosen[t] for t in requested_idx]
+        print(f"  Auto band select (window {E_win[0]:.2f}..{E_win[1]:.2f} eV):")
+        for t, c in chosen.items():
+            print(f"    requested {t} → selected {c}")
+    else:
+        band_idx = list(requested_idx)
+
     print("  Mapping DFT bands via T_inv ...")
-    dft_bands = map_dft_bands(E_dft_orig, kx_dft, ky_dft, kx, ky, T_inv,
-                              [b["index"] for b in bands_cfg])
+    dft_bands = map_dft_bands(E_dft_orig, kx_dft, ky_dft, kx, ky, T_inv, band_idx)
     print(f"  {len(dft_bands)} DFT bands mapped")
 
     # ── STEP 3: BSFI offset search ──
@@ -202,6 +274,32 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
     n_offsets = int(2 * BSFI_OFFSET_RANGE / BSFI_OFFSET_STEP) + 1
     offsets = np.linspace(-BSFI_OFFSET_RANGE, BSFI_OFFSET_RANGE, n_offsets)
     print(f"  offset: {offsets[0]:+.2f}→{offsets[-1]:+.2f} eV ({len(offsets)} steps)")
+    print(f"  BSFI weights: corr={W_CORR}, intensity={W_INT}, snr={W_SNR}, "
+          f"ridge={W_RIDGE}, path_ridge={W_PATH_RIDGE}")
+
+    def _bsfi(E0):
+        return compute_bsfi_2d(E0, I_t, E, w_corr=W_CORR, w_int=W_INT,
+                               w_snr=W_SNR, w_ridge=W_RIDGE,
+                               ridge_sigma=RIDGE_SIGMA)
+
+    # Band-path map along G-M-K-G for path-based ridge evaluation
+    nGM = int(math.sqrt((M[0]-G[0])**2 + (M[1]-G[1])**2))
+    nMK = int(math.sqrt((M[0]-K[0])**2 + (M[1]-K[1])**2))
+    nKG = int(math.sqrt((K[0]-G[0])**2 + (K[1]-G[1])**2))
+    path_pts = np.asarray([G, M, K, G])
+    row_inds, col_inds, path_inds = points2path(path_pts[:, 0], path_pts[:, 1],
+                                                npoints=[nGM, nMK, nKG])
+    pathD = bpm(np.moveaxis(I_t, 0, 2), pathr=row_inds, pathc=col_inds, eaxis=2)
+
+    def _path_ridge(E0):
+        prec = bpm(np.moveaxis(E0[np.newaxis], 0, 2), pathr=row_inds,
+                   pathc=col_inds, eaxis=2)[0]
+        return path_ridge_score(pathD, prec, E, sigma=RIDGE_SIGMA)
+
+    def _offset_score(E0):
+        """Combined score for offset selection: weighted path-ridge + 2D BSFI."""
+        total_w = W_PATH_RIDGE + 1.0
+        return (W_PATH_RIDGE * _path_ridge(E0) + _bsfi(E0)) / total_w
 
     print("  Stage 1: shared offset search ...")
     scores_shared = np.zeros(len(offsets))
@@ -211,26 +309,23 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
         for ind_band in range(N_BANDS):
             base_offset = bands_cfg[ind_band]["offset"]
             E0 = np.reshape(dft_bands[ind_band] + base_offset + off, (kx.shape[0], ky.shape[0]))
-            total_bsfi += compute_bsfi_2d(E0, I_t, E, w_corr=W_CORR, w_int=W_INT, w_snr=W_SNR)
+            total_bsfi += _offset_score(E0)
         scores_shared[i_off] = total_bsfi / N_BANDS
         if scores_shared[i_off] > best_shared_score:
             best_shared_score = scores_shared[i_off]; best_shared_off = off
-    print(f"  Stage 1 best: shared offset={best_shared_off:+.4f} eV, BSFI={best_shared_score:.4f}")
+    print(f"  Stage 1 best: shared offset={best_shared_off:+.4f} eV, score={best_shared_score:.4f}")
 
-    print(f"  Stage 2: per-band fine-tune within ±{FINE_TUNE_RANGE} eV")
-    fine_step = BSFI_OFFSET_STEP / 2.0
-    n_fine = int(2 * FINE_TUNE_RANGE / fine_step) + 1
-    fine_offsets = np.linspace(best_shared_off - FINE_TUNE_RANGE, best_shared_off + FINE_TUNE_RANGE, n_fine)
+    print("  Stage 2: per-band independent offset search ...")
     best_offsets = np.zeros(N_BANDS); best_bsfi_per_band = np.zeros(N_BANDS)
 
     for ind_band in range(N_BANDS):
         base_offset = bands_cfg[ind_band]["offset"]
-        best_off_b = fine_offsets[0]; best_bsfi_b = -np.inf
-        for off in fine_offsets:
+        best_off_b = offsets[0]; best_bsfi_b = -np.inf
+        for off in offsets:
             E0 = np.reshape(dft_bands[ind_band] + base_offset + off, (kx.shape[0], ky.shape[0]))
-            bsfi_val = compute_bsfi_2d(E0, I_t, E, w_corr=W_CORR, w_int=W_INT, w_snr=W_SNR)
-            if bsfi_val > best_bsfi_b:
-                best_bsfi_b = bsfi_val; best_off_b = off
+            score_val = _offset_score(E0)
+            if score_val > best_bsfi_b:
+                best_bsfi_b = score_val; best_off_b = off
         best_offsets[ind_band] = best_off_b; best_bsfi_per_band[ind_band] = best_bsfi_b
         delta = best_off_b - best_shared_off
         print(f"    Band {ind_band}: offset={best_off_b:+.4f} eV (Δ={delta:+.4f}), BSFI={best_bsfi_b:.4f}")
@@ -241,14 +336,13 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
     ax1.plot(offsets, scores_shared, "b-", linewidth=2)
     ax1.axvline(best_shared_off, color="red", linestyle="--", label=f"best={best_shared_off:+.4f}")
-    ax1.axvspan(best_shared_off-FINE_TUNE_RANGE, best_shared_off+FINE_TUNE_RANGE, alpha=0.1, color="orange")
     ax1.set(xlabel="Energy Offset (eV)", ylabel="Combined BSFI", title="Stage 1: Shared offset")
     ax1.legend(fontsize=8); ax1.grid(True, alpha=0.3)
     for ind_band in range(N_BANDS):
         ax2.axvline(best_offsets[ind_band], color=BAND_COLORS[ind_band], linewidth=2, label=f"B{ind_band}")
     ax2.axvline(best_shared_off, color="gray", linestyle="--", linewidth=1.5, label="shared")
-    ax2.set_xlim(best_shared_off-FINE_TUNE_RANGE-0.05, best_shared_off+FINE_TUNE_RANGE+0.05)
-    ax2.set(ylim=(0,1), xlabel="Energy Offset (eV)", title="Stage 2: Per-band fine-tune")
+    ax2.set_xlim(-BSFI_OFFSET_RANGE - 0.05, BSFI_OFFSET_RANGE + 0.05)
+    ax2.set(ylim=(0,1), xlabel="Energy Offset (eV)", title="Stage 2: Per-band offsets")
     ax2.legend(fontsize=8, ncol=3); ax2.set_yticks([])
     plt.tight_layout()
     fig.savefig(os.path.join(output_dir, "bsfi_curve.png"), dpi=150, bbox_inches="tight")
@@ -269,15 +363,16 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
         E0 = np.reshape(dft_bands[ind_band] + final_offset, (kx.shape[0], ky.shape[0]))
         EE, EE0 = np.meshgrid(E, E0)
         mrf.indEb = np.argmin(np.abs(EE - EE0), 1).reshape(E0.shape)
+        mrf.indE0 = mrf.indEb.copy()
         mrf.delHist()
         mrf.iter_para(num_epoch=NUM_EPOCHS, updateLogP=True, disable_tqdm=True)
         recon[ind_band] = mrf.getEb()
-        bsfi_b = compute_bsfi_2d(recon[ind_band], I_t, E, w_corr=W_CORR, w_int=W_INT, w_snr=W_SNR)
+        bsfi_b = _bsfi(recon[ind_band])
 
         sym_band(ind_band, recon, mrf.kx, mrf.ky, mrf.lengthKx, mrf.lengthKy)
 
         final_params.append({
-            "band": ind_band, "dft_band": ind_band*2,
+            "band": ind_band, "dft_band": int(band_idx[ind_band]),
             "T": [float(T[0,0]), float(T[0,1]), float(T[1,0]), float(T[1,1])],
             "offset": float(final_offset), "eta": float(eta), "bsfi_score": float(bsfi_b),
         })
@@ -301,10 +396,15 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
 
     save_data = {
         "crystal_data": crystal,
-        "bsfi_weights": {"correlation": W_CORR, "intensity": W_INT, "snr": W_SNR},
+        "bsfi_weights": {"correlation": W_CORR, "intensity": W_INT,
+                         "snr": W_SNR, "ridge": W_RIDGE,
+                         "path_ridge": W_PATH_RIDGE},
+        "ridge_sigma": RIDGE_SIGMA,
+        "max_shift": MAX_SHIFT,
         "bsfi_offset_range": [-BSFI_OFFSET_RANGE, BSFI_OFFSET_RANGE],
         "bsfi_offset_step": BSFI_OFFSET_STEP,
         "offset_mode": OFFSET_MODE,
+        "auto_band_select": AUTO_BAND_SELECT,
         "affine_T": [[float(T[0,0]), float(T[0,1])], [float(T[1,0]), float(T[1,1])]],
         "scale_x": float(scale_x), "scale_y": float(scale_y),
         "rotation_deg": float(rotation_deg),
@@ -314,7 +414,6 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
         "combined_bsfi": float(best_score),
         "shared_offset": float(best_shared_off),
         "shared_bsfi": float(best_shared_score),
-        "fine_tune_range": FINE_TUNE_RANGE,
     }
     with open(os.path.join(output_dir, "final_parameters.json"), "w") as f:
         json.dump(save_data, f, indent=2)

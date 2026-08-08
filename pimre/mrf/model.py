@@ -27,9 +27,13 @@ class MrfRec:
         Initial guess for band structure energy values.
     eta : float
         Standard deviation of neighbor interaction term.
+    max_shift : int or None
+        Maximum number of energy-grid steps a node may move away from its
+        initial value (E0). None disables the constraint. Prevents the band
+        from being pulled across to a neighbouring band during iteration.
     """
 
-    def __init__(self, E, kx=None, ky=None, I=None, E0=None, eta=0.1):
+    def __init__(self, E, kx=None, ky=None, I=None, E0=None, eta=0.1, max_shift=None):
         if kx is None and ky is None:
             raise Exception("Either kx or ky need to be specified!")
         elif kx is None:
@@ -48,6 +52,7 @@ class MrfRec:
         if np.any(self.I > 0):
             self.I += np.min(self.I[self.I > 0])
         self.eta = eta
+        self.max_shift = int(max_shift) if max_shift is not None else None
 
         if E0 is None:
             self.indEb = np.ones((self.lengthKx, self.lengthKy), int) * int(self.lengthE / 2)
@@ -164,6 +169,11 @@ class MrfRec:
         if indy < (self.lengthKy - 1):
             logP -= (ENN - ENN[self.indEb[indx, indy + 1]]) ** 2
         logP += logI[indx, indy, :]
+        if self.max_shift is not None:
+            lo = max(0, self.indE0[indx, indy] - self.max_shift)
+            hi = min(self.lengthE - 1, self.indE0[indx, indy] + self.max_shift)
+            logP[:lo] = -np.inf
+            logP[hi + 1:] = -np.inf
         self.indEb[indx, indy] = np.argmax(logP)
 
     # --- Parallel optimization (PyTorch) ---
@@ -199,21 +209,27 @@ class MrfRec:
 
         logI = []
         indEb = []
+        indEb0 = []
         for i in range(2):
             logI_row = []
             indEb_row = []
+            indEb0_row = []
             for j in range(2):
                 logI_row.append(torch.tensor(np.log(self.I[indX + i, indY + j, :]), dtype=torch.float32))
                 indEb_row.append(torch.tensor(
                     np.expand_dims(self.indEb[indX + i, indY + j], 2), dtype=torch.long
                 ))
+                indEb0_row.append(torch.tensor(
+                    np.expand_dims(self.indE0[indX + i, indY + j], 2), dtype=torch.long
+                ))
             logI.append(logI_row)
             indEb.append(indEb_row)
+            indEb0.append(indEb0_row)
 
         for epoch in tqdm(range(num_epoch), disable=disable_tqdm):
             # White nodes
             logP = self._compute_logP_pt(E1d, E3d, logI, indEb)
-            updateW = self._compute_update_pt(logP)
+            updateW = self._compute_update_pt(logP, indEb0, self.max_shift)
             for i in range(2):
                 indEb[i][i] = updateW[i].unsqueeze(2)
             if updateLogP:
@@ -221,7 +237,7 @@ class MrfRec:
 
             # Black nodes
             logP = self._compute_logP_pt(E1d, E3d, logI, indEb)
-            updateB = self._compute_update_pt(logP)
+            updateB = self._compute_update_pt(logP, indEb0, self.max_shift, black=True)
             for i in range(2):
                 indEb[i][1 - i] = updateB[i].unsqueeze(2)
             if updateLogP:
@@ -315,9 +331,28 @@ class MrfRec:
             logP.append(logP_row)
         return logP
 
-    def _compute_update_pt(self, logP):
-        """Compute update for white/black nodes."""
-        return [logP[i][i].argmax(dim=2) for i in range(2)]
+    def _compute_update_pt(self, logP, indEb0=None, max_shift=None, black=False):
+        """Compute update for white/black nodes.
+
+        In the white phase cell (i, i) is updated using logP[i][i]; in the
+        black phase cell (i, 1-i) is updated using logP[i][1-i].
+
+        If ``max_shift`` is given, candidates further than ``max_shift``
+        energy-grid steps from the initial value (indE0) are forbidden,
+        preventing the band from jumping to a neighbouring band.
+        """
+        updates = []
+        for i in range(2):
+            j = 1 - i if black else i
+            lp = logP[i][j]
+            if max_shift is not None and indEb0 is not None:
+                lo = indEb0[i][j] - max_shift
+                hi = indEb0[i][j] + max_shift
+                idx = torch.arange(lp.shape[2], device=lp.device)[None, None, :]
+                mask = (idx >= lo) & (idx <= hi)
+                lp = torch.where(mask, lp, torch.full_like(lp, -float("inf")))
+            updates.append(lp.argmax(dim=2))
+        return updates
 
     def _compute_logPTot_pt(self, logP, logI, indEb):
         """Compute total logP."""

@@ -40,12 +40,15 @@ lattice:
   c: 9.1297
   gamma: 120.0
 mrf:
+  num_epochs: 10
+  auto_band_select: true
+  max_shift: 10
   bands:
-  - eta: 6.5e-06
+  - eta: 0.05
     index: 0
     k_scale: 1.24
     offset: 0.75
-  - eta: 6.5e-09
+  - eta: 0.05
     index: 1
     k_scale: 1.24
     offset: 0.8
@@ -53,21 +56,24 @@ mrf:
     index: 2
     k_scale: 1.0
     offset: 0.76
-  - eta: 6.5e-08
+  - eta: 0.05
     index: 3
     k_scale: 1.24
     offset: 0.63
-  - eta: 0.0045
+  - eta: 0.05
     index: 4
     k_scale: 1.24
     offset: 0.62
   bsfi:
     fine_tune_range: 0.05
-    offset_range: 1.0
+    offset_range: 1.5
     offset_step: 0.1
+    ridge_sigma: 0.1
     weights:
       correlation: 0.6
       intensity: 0.3
+      path_ridge: 0.8
+      ridge: 0.5
       snr: 0.1
   offset_mode: hierarchical
   smooth_sigma:

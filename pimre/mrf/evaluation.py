@@ -70,10 +70,128 @@ def expand_dft_bands(E_dft, kx_dft, ky_dft, target_kx, target_ky):
     return E_dft_expanded, padded_kx, padded_ky
 
 
-def compute_bsfi_2d(E0, I_t, E_arr, stride=4, w_corr=0.6, w_int=0.3, w_snr=0.1):
+def ridge_alignment_score(E0, I_t, E_arr, sigma=0.1, window=0.15):
+    """Band-ridge alignment score.
+
+    For every k point the intensity profile along E within ±window of the
+    band energy is taken; E_peak is the energy of the profile maximum. The
+    score is the mean of exp(-((E_band - E_peak) / sigma)^2), i.e. 1 when the
+    band sits exactly on the local intensity ridge and decaying as it drifts
+    away (in contrast to the derivative-correlation term, this rewards being
+    on the ridge rather than on its edge).
+
+    Parameters
+    ----------
+    E0 : 2D array
+        Band energy on (kx, ky) grid.
+    I_t : 3D array
+        Intensity data (E, kx, ky).
+    E_arr : 1D array
+        Energy axis (monotonically increasing).
+    sigma : float
+        Width of the ridge penalty in eV.
+    window : float
+        Half-width of the intensity profile window in eV.
+
+    Returns
+    -------
+    score : float
+        Mean ridge alignment in [0, 1].
+    """
+    nE = len(E_arr)
+    if E_arr[0] > E_arr[-1]:
+        E_arr = E_arr[::-1]
+        I_t = I_t[::-1]
+    dE = abs(E_arr[1] - E_arr[0])
+    hw = max(1, int(round(window / dE)))
+
+    skx, sky = E0.shape
+    e_idx = np.interp(E0.ravel(), E_arr, np.arange(nE))
+    ind = np.round(e_idx).astype(int).clip(0, nE - 1).reshape(skx, sky)
+
+    rows = np.arange(skx)[:, None]
+    cols = np.arange(sky)[None, :]
+    prof = np.stack([
+        I_t[np.clip(ind + k, 0, nE - 1), rows, cols]
+        for k in range(-hw, hw + 1)
+    ])  # (2hw+1, skx, sky)
+    k_peak = np.argmax(prof, axis=0)
+    I_peak = np.max(prof, axis=0)
+    E_peak = E_arr[np.clip(ind + (k_peak - hw), 0, nE - 1)]
+
+    dE2 = ((E0 - E_peak) / sigma) ** 2
+    score = np.exp(-dE2)
+    # Blank-region protection: a profile maximum that is not significantly
+    # brighter than the global background cannot be a real ridge; such points
+    # get zero score instead of absorbing the band into noise.
+    thr = 0.05 * np.max(prof)
+    score[I_peak < thr] = 0.0
+
+    return float(np.mean(score))
+
+
+def path_ridge_score(pathD, band_path, E_arr, sigma=0.1, window=0.15):
+    """Band-ridge alignment along a band path.
+
+    Same ridge logic as :func:`ridge_alignment_score` but evaluated on a
+    band-path map ``pathD`` of shape (E, k): the intensity profile along E at
+    each path point is used to find the local ridge energy. This is more
+    focused than the full 2D evaluation because ARPES intensity typically
+    only covers part of the BZ.
+
+    Parameters
+    ----------
+    pathD : 2D array
+        Band path intensity map (E, k).
+    band_path : 1D array
+        Band energy along the path (k,).
+    E_arr : 1D array
+        Energy axis (monotonically increasing).
+    sigma : float
+        Width of the ridge penalty in eV.
+    window : float
+        Half-width of the intensity profile window in eV.
+
+    Returns
+    -------
+    score : float
+        Mean ridge alignment in [0, 1].
+    """
+    nE = len(E_arr)
+    if E_arr[0] > E_arr[-1]:
+        E_arr = E_arr[::-1]
+        pathD = pathD[::-1]
+    dE = abs(E_arr[1] - E_arr[0])
+    hw = max(1, int(round(window / dE)))
+    nK = len(band_path)
+
+    idx = np.round(np.interp(band_path, E_arr, np.arange(nE))).astype(int).clip(0, nE - 1)
+    prof = np.stack([
+        pathD[np.clip(idx + k, 0, nE - 1), np.arange(nK)]
+        for k in range(-hw, hw + 1)
+    ])  # (2hw+1, nK)
+    k_peak = np.argmax(prof, axis=0)
+    I_peak = np.max(prof, axis=0)
+    E_peak = E_arr[np.clip(idx + (k_peak - hw), 0, nE - 1)]
+
+    score = np.exp(-((band_path - E_peak) / sigma) ** 2)
+    thr = 0.05 * np.max(prof)
+    score[I_peak < thr] = 0.0
+    return float(np.mean(score))
+
+
+def compute_bsfi_2d(E0, I_t, E_arr, stride=4, w_corr=0.6, w_int=0.3, w_snr=0.1,
+                    w_ridge=0.0, ridge_sigma=0.1):
     """Compute BSFI directly on the 2D band map.
 
-    BSFI = w_corr * |corr(dE/dk, dI/dk)| + w_int * intensity_ratio + w_snr * SNR
+    BSFI = Σ w_i · metric_i / Σ w_i with:
+      corr:       |corr(dE/dk, dI/dk)| (derivative correlation)
+      intensity:  global intensity ratio
+      snr:        band intensity SNR
+      ridge:      band-ridge alignment (see ridge_alignment_score)
+
+    Setting a weight to 0 disables that component; the score is normalized
+    by the sum of the active weights.
 
     Parameters
     ----------
@@ -85,8 +203,10 @@ def compute_bsfi_2d(E0, I_t, E_arr, stride=4, w_corr=0.6, w_int=0.3, w_snr=0.1):
         Energy axis (must be monotonically increasing for np.interp).
     stride : int
         Downsampling stride for speed.
-    w_corr, w_int, w_snr : float
-        BSFI weights.
+    w_corr, w_int, w_snr, w_ridge : float
+        Component weights.
+    ridge_sigma : float
+        Width of the ridge penalty in eV.
 
     Returns
     -------
@@ -126,8 +246,13 @@ def compute_bsfi_2d(E0, I_t, E_arr, stride=4, w_corr=0.6, w_int=0.3, w_snr=0.1):
         corr_y = 0.0
 
     score_corr = (abs(corr_x) + abs(corr_y)) / 2
+    ridge = ridge_alignment_score(E0_s, I_t_s, E_arr, sigma=ridge_sigma) if w_ridge > 0 else 0.0
 
-    return w_corr * score_corr + w_int * intensity_ratio + w_snr * snr
+    total_w = w_corr + w_int + w_snr + w_ridge
+    if total_w <= 0:
+        return 0.0
+    return (w_corr * score_corr + w_int * intensity_ratio
+            + w_snr * snr + w_ridge * ridge) / total_w
 
 
 # ── Affine transform ──

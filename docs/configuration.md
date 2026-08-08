@@ -114,15 +114,19 @@ A list of band configurations, each with:
 |-------|------|---------|-------------|
 | `offset_range` | float | `1.0` | BSFI offset search range (eV) |
 | `offset_step` | float | `0.1` | BSFI offset search step (eV) |
-| `fine_tune_range` | float | `0.05` | Per-band fine-tune range (eV) |
+| `fine_tune_range` | float | `0.05` | Legacy per-band fine-tune range (kept for GUI compatibility; the pipeline now searches the full `offset_range` per band) |
+| `ridge_sigma` | float | `0.1` | Width of the ridge alignment penalty (eV) |
 
 ### `mrf.bsfi.weights`
+
+The score is `Σ w_i·metric_i / Σ w_i`; setting a weight to `0` disables that component.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `correlation` | float | `0.6` | Weight for dE/dk correlation |
 | `intensity` | float | `0.3` | Weight for intensity ratio |
 | `snr` | float | `0.1` | Weight for signal-to-noise ratio |
+| `ridge` | float | `0.5` | Weight for band-ridge alignment (1 = band on local intensity ridge) |
 
 ### Other MRF fields
 
