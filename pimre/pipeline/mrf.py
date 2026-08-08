@@ -77,6 +77,29 @@ def select_bands_in_window(E_dft, kx_dft, ky_dft, kx, ky, T_inv, band_indices,
     return coverage
 
 
+def _smooth_path_segments(y, max_window=31):
+    """Savitzky-Golay smoothing that skips NaN segments (bands outside the
+    measured energy window are NaN and must not produce spurious flats)."""
+    y = np.asarray(y, dtype=float)
+    out = np.full_like(y, np.nan)
+    valid = ~np.isnan(y)
+    idx = np.flatnonzero(valid)
+    if len(idx) == 0:
+        return out
+    for seg in np.split(idx, np.where(np.diff(idx) > 1)[0] + 1):
+        if len(seg) < 3:
+            out[seg] = y[seg]
+            continue
+        window = min(max_window, len(seg) - 2)
+        if window < 3:
+            window = 3
+        if window % 2 == 0:
+            window -= 1
+        polyorder = min(2, max(1, window // 2 - 1))
+        out[seg] = savgol_filter(y[seg], window, polyorder)
+    return out
+
+
 def draw_path(recon_bcsm, I_t_data, E_arr, choose, savepath, G, M, M1, K, K1):
     """Draw and save a band path plot (M-G, K-G, or G-M-K-G)."""
     if choose == "M":
@@ -103,13 +126,7 @@ def draw_path(recon_bcsm, I_t_data, E_arr, choose, savepath, G, M, M1, K, K1):
               aspect="auto", origin="lower")
     n_bands = min(prec.shape[0], len(BAND_COLORS))
     for ib in range(n_bands):
-        window = min(31, len(prec[ib]) - 2)
-        if window < 3:
-            window = 3
-        if window % 2 == 0:
-            window -= 1
-        polyorder = min(2, max(1, window // 2 - 1))
-        ax.plot(savgol_filter(prec[ib, :], window, polyorder),
+        ax.plot(_smooth_path_segments(prec[ib, :]),
                 zorder=1, lw=2.3, color=BAND_COLORS[ib])
     ax.set(xlim=(0, len(row_inds)), ylim=(E_arr[0], E_arr[-1]))
     ax.set_xticks(path_inds)
@@ -377,10 +394,17 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
 
         sym_band(ind_band, recon, mrf.kx, mrf.ky, mrf.lengthKx, mrf.lengthKy)
 
+        # Pixels whose band energy lies outside the measured window have no
+        # experimental constraint; mark them NaN instead of clamping to the
+        # energy-axis edge (which would produce a spurious flat band).
+        outside = (E0 > E.max()) | (E0 < E.min())
+        recon[ind_band][outside] = np.nan
+
         final_params.append({
             "band": ind_band, "dft_band": int(band_idx[ind_band]),
             "T": [float(T[0,0]), float(T[0,1]), float(T[1,0]), float(T[1,1])],
             "offset": float(final_offset), "eta": float(eta), "bsfi_score": float(bsfi_b),
+            "outside_window_frac": float(np.mean(outside)),
         })
         print(f"  Band {ind_band}: offset={final_offset:+.4f} eV, eta={eta}, BSFI={bsfi_b:.4f}")
 
