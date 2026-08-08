@@ -132,5 +132,4 @@ The score is `Σ w_i·metric_i / Σ w_i`; setting a weight to `0` disables that 
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `offset_mode` | str | `"shared"` | `"shared"` (one global offset for all bands) or `"per_band"` |
 | `smooth_sigma` | list | `[0.5, 0.5, 0.1]` | Gaussian smooth sigma (kx, ky, E) |

@@ -163,6 +163,14 @@ def path_ridge_score(pathD, band_path, E_arr, sigma=0.1, window=0.15):
         pathD = pathD[::-1]
     dE = abs(E_arr[1] - E_arr[0])
     hw = max(1, int(round(window / dE)))
+
+    # Bands outside the measured window are NaN; evaluate on valid points only.
+    band_path = np.asarray(band_path, dtype=float)
+    valid = ~np.isnan(band_path)
+    if valid.sum() < 10:
+        return 0.0
+    band_path = band_path[valid]
+    pathD = pathD[:, valid]
     nK = len(band_path)
 
     idx = np.round(np.interp(band_path, E_arr, np.arange(nE))).astype(int).clip(0, nE - 1)

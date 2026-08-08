@@ -186,7 +186,6 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
     W_PATH_RIDGE = bsfi_cfg["weights"].get("path_ridge", 0.8)
     RIDGE_SIGMA = bsfi_cfg.get("ridge_sigma", 0.1)
     MAX_SHIFT = mrf_cfg.get("max_shift", 10)
-    OFFSET_MODE = mrf_cfg["offset_mode"]
     smooth_sigma = mrf_cfg["smooth_sigma"]
 
     if exp_data is None:
@@ -269,9 +268,9 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
     dft_bands = map_dft_bands(E_dft_orig, kx_dft, ky_dft, kx, ky, T_inv, band_idx)
     print(f"  {len(dft_bands)} DFT bands mapped")
 
-    # ── STEP 3: BSFI offset search ──
+    # ── STEP 3: BSFI offset search (shared global offset) ──
     print("\n" + "=" * 60)
-    print(f"STEP 3: BSFI offset search — mode={OFFSET_MODE}")
+    print("STEP 3: BSFI shared-offset search — all bands move together")
     print("=" * 60)
 
     n_offsets = int(2 * BSFI_OFFSET_RANGE / BSFI_OFFSET_STEP) + 1
@@ -304,45 +303,32 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
         total_w = W_PATH_RIDGE + 1.0
         return (W_PATH_RIDGE * _path_ridge(E0) + _bsfi(E0)) / total_w
 
-    print("  Stage 1: shared offset search ...")
+    # Shared search: every band is shifted by the same absolute offset and
+    # the mean combined score over ALL bands decides the optimum.  This
+    # prevents a single band from locking the others into its own (possibly
+    # misidentified) position.
+    print("  Shared offset search (all bands shifted together) ...")
     scores_shared = np.zeros(len(offsets))
+    per_band_scores = np.zeros((N_BANDS, len(offsets)))
     best_shared_score = -np.inf; best_shared_off = offsets[0]
     for i_off, off in enumerate(offsets):
         total_bsfi = 0.0
         for ind_band in range(N_BANDS):
-            if OFFSET_MODE == "shared":
-                # Absolute offset shared by all bands (energy calibration
-                # is common); the per-band base offsets are ignored.
-                E0 = np.reshape(dft_bands[ind_band] + off, (kx.shape[0], ky.shape[0]))
-            else:
-                base_offset = bands_cfg[ind_band]["offset"]
-                E0 = np.reshape(dft_bands[ind_band] + base_offset + off, (kx.shape[0], ky.shape[0]))
-            total_bsfi += _offset_score(E0)
+            E0 = np.reshape(dft_bands[ind_band] + off, (kx.shape[0], ky.shape[0]))
+            s = _offset_score(E0)
+            per_band_scores[ind_band, i_off] = s
+            total_bsfi += s
         scores_shared[i_off] = total_bsfi / N_BANDS
         if scores_shared[i_off] > best_shared_score:
             best_shared_score = scores_shared[i_off]; best_shared_off = off
-    print(f"  Stage 1 best: shared offset={best_shared_off:+.4f} eV, score={best_shared_score:.4f}")
+    print(f"  Best shared offset = {best_shared_off:+.4f} eV, mean score = {best_shared_score:.4f}")
+    print("  Per-band scores at the shared optimum:")
+    for ind_band in range(N_BANDS):
+        i0 = int(np.argmin(np.abs(offsets - best_shared_off)))
+        print(f"    band {ind_band}: score={per_band_scores[ind_band, i0]:.4f}")
 
-    if OFFSET_MODE == "per_band":
-        print("  Stage 2: per-band independent offset search ...")
-        best_offsets = np.zeros(N_BANDS)
-        best_bsfi_per_band = np.zeros(N_BANDS)
-        for ind_band in range(N_BANDS):
-            base_offset = bands_cfg[ind_band]["offset"]
-            best_off_b = offsets[0]; best_bsfi_b = -np.inf
-            for off in offsets:
-                E0 = np.reshape(dft_bands[ind_band] + base_offset + off, (kx.shape[0], ky.shape[0]))
-                score_val = _offset_score(E0)
-                if score_val > best_bsfi_b:
-                    best_bsfi_b = score_val; best_off_b = off
-            best_offsets[ind_band] = best_off_b; best_bsfi_per_band[ind_band] = best_bsfi_b
-            delta = best_off_b - best_shared_off
-            print(f"    Band {ind_band}: offset={best_off_b:+.4f} eV (Δ={delta:+.4f}), BSFI={best_bsfi_b:.4f}")
-    else:
-        # Shared mode: one absolute energy offset for all bands.
-        print(f"  Stage 2: absolute offset {best_shared_off:+.4f} eV used for all bands")
-        best_offsets = np.full(N_BANDS, best_shared_off)
-        best_bsfi_per_band = np.full(N_BANDS, best_shared_score)
+    best_offsets = np.full(N_BANDS, best_shared_off)
+    best_bsfi_per_band = np.full(N_BANDS, best_shared_score)
 
     best_score = best_bsfi_per_band.mean()
     print(f"  Mean score = {best_score:.4f}")
@@ -352,18 +338,13 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
     ax1.axvline(best_shared_off, color="red", linestyle="--", label=f"best={best_shared_off:+.4f}")
     ax1.set(xlabel="Energy Offset (eV)", ylabel="Combined BSFI", title="Shared offset search")
     ax1.legend(fontsize=8); ax1.grid(True, alpha=0.3)
-    if OFFSET_MODE == "per_band":
-        for ind_band in range(N_BANDS):
-            ax2.axvline(best_offsets[ind_band], color=BAND_COLORS[ind_band], linewidth=2, label=f"B{ind_band}")
-        ax2.axvline(best_shared_off, color="gray", linestyle="--", linewidth=1.5, label="shared")
-        ax2.set_xlim(-BSFI_OFFSET_RANGE - 0.05, BSFI_OFFSET_RANGE + 0.05)
-        ax2.set(ylim=(0,1), xlabel="Energy Offset (eV)", title="Stage 2: Per-band offsets")
-        ax2.legend(fontsize=8, ncol=3); ax2.set_yticks([])
-    else:
-        ax2.axvline(best_shared_off, color=BAND_COLORS[0], linewidth=2, label="shared offset")
-        ax2.set_xlim(-BSFI_OFFSET_RANGE - 0.05, BSFI_OFFSET_RANGE + 0.05)
-        ax2.set(ylim=(0,1), xlabel="Energy Offset (eV)", title="Shared offset")
-        ax2.legend(fontsize=8); ax2.set_yticks([])
+    for ind_band in range(N_BANDS):
+        ax2.plot(offsets, per_band_scores[ind_band], color=BAND_COLORS[ind_band],
+                 linewidth=1.5, alpha=0.8, label=f"B{ind_band}")
+    ax2.axvline(best_shared_off, color="gray", linestyle="--", linewidth=1.5, label="shared")
+    ax2.set_xlim(-BSFI_OFFSET_RANGE - 0.05, BSFI_OFFSET_RANGE + 0.05)
+    ax2.set(xlabel="Energy Offset (eV)", title="Per-band scores (shared offset)")
+    ax2.legend(fontsize=8, ncol=3)
     plt.tight_layout()
     fig.savefig(os.path.join(output_dir, "bsfi_curve.png"), dpi=150, bbox_inches="tight")
     plt.close()
@@ -378,10 +359,7 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
 
     for ind_band in range(N_BANDS):
         eta = bands_cfg[ind_band]["eta"]
-        if OFFSET_MODE == "shared":
-            final_offset = float(best_offsets[ind_band])
-        else:
-            final_offset = bands_cfg[ind_band]["offset"] + best_offsets[ind_band]
+        final_offset = float(best_offsets[ind_band])
         mrf.eta = eta
         E0 = np.reshape(dft_bands[ind_band] + final_offset, (kx.shape[0], ky.shape[0]))
         EE, EE0 = np.meshgrid(E, E0)
@@ -433,7 +411,6 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
         "max_shift": MAX_SHIFT,
         "bsfi_offset_range": [-BSFI_OFFSET_RANGE, BSFI_OFFSET_RANGE],
         "bsfi_offset_step": BSFI_OFFSET_STEP,
-        "offset_mode": OFFSET_MODE,
         "affine_T": [[float(T[0,0]), float(T[0,1])], [float(T[1,0]), float(T[1,1])]],
         "scale": float(scale),
         "rotation_deg": float(rotation_deg),
