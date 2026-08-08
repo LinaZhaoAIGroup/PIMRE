@@ -258,9 +258,14 @@ def compute_bsfi_2d(E0, I_t, E_arr, stride=4, w_corr=0.6, w_int=0.3, w_snr=0.1,
 # ── Affine transform ──
 
 def compute_affine_transform(kx, ky, G, K, M, kx_dft, ky_dft, KP_dft_raw, MP_dft_raw):
-    """Compute 2×2 affine transform T that maps DFT → experiment.
+    """Compute a similarity transform T (isotropic scale + rotation) that
+    maps DFT → experiment.
 
-    T is computed by matching the Γ→K and Γ→M vectors in both spaces.
+    T is fitted from the Γ→K and Γ→M vectors in both spaces via the
+    Procrustes problem, i.e. T = s·R with a single scale s and one rotation
+    R.  This enforces the physical constraint that the momentum scaling is
+    isotropic (only lattice-parameter errors should be absorbed, not
+    anisotropic distortion).
 
     Parameters
     ----------
@@ -276,11 +281,11 @@ def compute_affine_transform(kx, ky, G, K, M, kx_dft, ky_dft, KP_dft_raw, MP_dft
     Returns
     -------
     T : 2×2 array
-        Affine transform matrix.
+        Similarity transform matrix (s·R).
     T_inv : 2×2 array
         Inverse transform.
-    scale_x, scale_y : float
-        Scale factors.
+    scale : float
+        Isotropic scale factor.
     rotation_deg : float
         Rotation angle in degrees.
     """
@@ -297,14 +302,23 @@ def compute_affine_transform(kx, ky, G, K, M, kx_dft, ky_dft, KP_dft_raw, MP_dft
 
     S_dft = np.column_stack((K_vec_dft, M_vec_dft))
     S_exp = np.column_stack((K_vec_exp, M_vec_exp))
-    T = S_exp @ np.linalg.inv(S_dft)
+
+    # Procrustes: T = s·R minimizing ||S_exp - s·R·S_dft||_F
+    A = S_exp @ S_dft.T
+    U, Sigma, Vt = np.linalg.svd(A)
+    R = U @ Vt
+    if np.linalg.det(R) < 0:
+        Vt[-1] *= -1
+        R = U @ Vt
+    s = float(np.trace(np.diag(Sigma))) / (np.linalg.norm(S_dft, "fro") ** 2)
+
+    T = s * R
     T_inv = np.linalg.inv(T)
 
-    scale_x = np.linalg.norm(T[:, 0])
-    scale_y = np.linalg.norm(T[:, 1])
-    rotation_deg = np.rad2deg(np.arctan2(T[1, 0], T[0, 0]))
+    scale = s
+    rotation_deg = np.rad2deg(np.arctan2(R[1, 0], R[0, 0]))
 
-    return T, T_inv, scale_x, scale_y, rotation_deg
+    return T, T_inv, scale, rotation_deg
 
 
 def map_dft_bands(E_dft_orig, kx_dft_orig, ky_dft_orig, kx, ky, T_inv, band_indices):

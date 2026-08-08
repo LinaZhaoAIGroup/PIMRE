@@ -79,7 +79,7 @@ mrf:
       path_ridge: 0.8
       ridge: 0.5
       snr: 0.1
-  offset_mode: hierarchical
+  offset_mode: shared
   smooth_sigma:
   - 0.5
   - 0.5

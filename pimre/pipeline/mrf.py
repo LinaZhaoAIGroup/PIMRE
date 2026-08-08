@@ -3,7 +3,7 @@
 Workflow:
   1. Load preprocessed experimental data and DFT band map
   2. Find HSPs, compute affine transform T (DFT → exp)
-  3. BSFI offset search (hierarchical: shared → per-band fine-tune)
+  3. BSFI offset search (shared global offset, or per-band)
   4. Final MRF reconstruction with symmetrization
   5. Generate path plots and save results
 """
@@ -220,10 +220,10 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
     KP_dft_raw, MP_dft_raw = dft_KM(kx_dft, ky_dft)
     print(f"  HSPs: G={G}, M={M}, K={K} (source={result.source})")
 
-    T, T_inv, scale_x, scale_y, rotation_deg = compute_affine_transform(
+    T, T_inv, scale, rotation_deg = compute_affine_transform(
         kx, ky, G, K, M, kx_dft, ky_dft, KP_dft_raw, MP_dft_raw)
     print(f"  T = [[{T[0,0]:.6f}, {T[0,1]:.6f}], [{T[1,0]:.6f}, {T[1,1]:.6f}]]")
-    print(f"  scale_x={scale_x:.4f}, scale_y={scale_y:.4f}, rotation={rotation_deg:.2f}°")
+    print(f"  isotropic scale={scale:.4f}, rotation={rotation_deg:.2f}°")
 
     gx = np.argmin(np.abs(kx_dft)); gy = np.argmin(np.abs(ky_dft))
     K_vec_exp = np.array([kx[K[0]]-kx[G[0]], ky[K[1]]-ky[G[1]]])
@@ -293,43 +293,60 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
     for i_off, off in enumerate(offsets):
         total_bsfi = 0.0
         for ind_band in range(N_BANDS):
-            base_offset = bands_cfg[ind_band]["offset"]
-            E0 = np.reshape(dft_bands[ind_band] + base_offset + off, (kx.shape[0], ky.shape[0]))
+            if OFFSET_MODE == "shared":
+                # Absolute offset shared by all bands (energy calibration
+                # is common); the per-band base offsets are ignored.
+                E0 = np.reshape(dft_bands[ind_band] + off, (kx.shape[0], ky.shape[0]))
+            else:
+                base_offset = bands_cfg[ind_band]["offset"]
+                E0 = np.reshape(dft_bands[ind_band] + base_offset + off, (kx.shape[0], ky.shape[0]))
             total_bsfi += _offset_score(E0)
         scores_shared[i_off] = total_bsfi / N_BANDS
         if scores_shared[i_off] > best_shared_score:
             best_shared_score = scores_shared[i_off]; best_shared_off = off
     print(f"  Stage 1 best: shared offset={best_shared_off:+.4f} eV, score={best_shared_score:.4f}")
 
-    print("  Stage 2: per-band independent offset search ...")
-    best_offsets = np.zeros(N_BANDS); best_bsfi_per_band = np.zeros(N_BANDS)
-
-    for ind_band in range(N_BANDS):
-        base_offset = bands_cfg[ind_band]["offset"]
-        best_off_b = offsets[0]; best_bsfi_b = -np.inf
-        for off in offsets:
-            E0 = np.reshape(dft_bands[ind_band] + base_offset + off, (kx.shape[0], ky.shape[0]))
-            score_val = _offset_score(E0)
-            if score_val > best_bsfi_b:
-                best_bsfi_b = score_val; best_off_b = off
-        best_offsets[ind_band] = best_off_b; best_bsfi_per_band[ind_band] = best_bsfi_b
-        delta = best_off_b - best_shared_off
-        print(f"    Band {ind_band}: offset={best_off_b:+.4f} eV (Δ={delta:+.4f}), BSFI={best_bsfi_b:.4f}")
+    if OFFSET_MODE == "per_band":
+        print("  Stage 2: per-band independent offset search ...")
+        best_offsets = np.zeros(N_BANDS)
+        best_bsfi_per_band = np.zeros(N_BANDS)
+        for ind_band in range(N_BANDS):
+            base_offset = bands_cfg[ind_band]["offset"]
+            best_off_b = offsets[0]; best_bsfi_b = -np.inf
+            for off in offsets:
+                E0 = np.reshape(dft_bands[ind_band] + base_offset + off, (kx.shape[0], ky.shape[0]))
+                score_val = _offset_score(E0)
+                if score_val > best_bsfi_b:
+                    best_bsfi_b = score_val; best_off_b = off
+            best_offsets[ind_band] = best_off_b; best_bsfi_per_band[ind_band] = best_bsfi_b
+            delta = best_off_b - best_shared_off
+            print(f"    Band {ind_band}: offset={best_off_b:+.4f} eV (Δ={delta:+.4f}), BSFI={best_bsfi_b:.4f}")
+    else:
+        # Shared mode: one absolute energy offset for all bands.
+        print(f"  Stage 2: absolute offset {best_shared_off:+.4f} eV used for all bands")
+        best_offsets = np.full(N_BANDS, best_shared_off)
+        best_bsfi_per_band = np.full(N_BANDS, best_shared_score)
 
     best_score = best_bsfi_per_band.mean()
-    print(f"  Mean BSFI = {best_score:.4f}")
+    print(f"  Mean score = {best_score:.4f}")
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
     ax1.plot(offsets, scores_shared, "b-", linewidth=2)
     ax1.axvline(best_shared_off, color="red", linestyle="--", label=f"best={best_shared_off:+.4f}")
-    ax1.set(xlabel="Energy Offset (eV)", ylabel="Combined BSFI", title="Stage 1: Shared offset")
+    ax1.set(xlabel="Energy Offset (eV)", ylabel="Combined BSFI", title="Shared offset search")
     ax1.legend(fontsize=8); ax1.grid(True, alpha=0.3)
-    for ind_band in range(N_BANDS):
-        ax2.axvline(best_offsets[ind_band], color=BAND_COLORS[ind_band], linewidth=2, label=f"B{ind_band}")
-    ax2.axvline(best_shared_off, color="gray", linestyle="--", linewidth=1.5, label="shared")
-    ax2.set_xlim(-BSFI_OFFSET_RANGE - 0.05, BSFI_OFFSET_RANGE + 0.05)
-    ax2.set(ylim=(0,1), xlabel="Energy Offset (eV)", title="Stage 2: Per-band offsets")
-    ax2.legend(fontsize=8, ncol=3); ax2.set_yticks([])
+    if OFFSET_MODE == "per_band":
+        for ind_band in range(N_BANDS):
+            ax2.axvline(best_offsets[ind_band], color=BAND_COLORS[ind_band], linewidth=2, label=f"B{ind_band}")
+        ax2.axvline(best_shared_off, color="gray", linestyle="--", linewidth=1.5, label="shared")
+        ax2.set_xlim(-BSFI_OFFSET_RANGE - 0.05, BSFI_OFFSET_RANGE + 0.05)
+        ax2.set(ylim=(0,1), xlabel="Energy Offset (eV)", title="Stage 2: Per-band offsets")
+        ax2.legend(fontsize=8, ncol=3); ax2.set_yticks([])
+    else:
+        ax2.axvline(best_shared_off, color=BAND_COLORS[0], linewidth=2, label="shared offset")
+        ax2.set_xlim(-BSFI_OFFSET_RANGE - 0.05, BSFI_OFFSET_RANGE + 0.05)
+        ax2.set(ylim=(0,1), xlabel="Energy Offset (eV)", title="Shared offset")
+        ax2.legend(fontsize=8); ax2.set_yticks([])
     plt.tight_layout()
     fig.savefig(os.path.join(output_dir, "bsfi_curve.png"), dpi=150, bbox_inches="tight")
     plt.close()
@@ -344,7 +361,10 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
 
     for ind_band in range(N_BANDS):
         eta = bands_cfg[ind_band]["eta"]
-        final_offset = bands_cfg[ind_band]["offset"] + best_offsets[ind_band]
+        if OFFSET_MODE == "shared":
+            final_offset = float(best_offsets[ind_band])
+        else:
+            final_offset = bands_cfg[ind_band]["offset"] + best_offsets[ind_band]
         mrf.eta = eta
         E0 = np.reshape(dft_bands[ind_band] + final_offset, (kx.shape[0], ky.shape[0]))
         EE, EE0 = np.meshgrid(E, E0)
@@ -391,7 +411,7 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
         "bsfi_offset_step": BSFI_OFFSET_STEP,
         "offset_mode": OFFSET_MODE,
         "affine_T": [[float(T[0,0]), float(T[0,1])], [float(T[1,0]), float(T[1,1])]],
-        "scale_x": float(scale_x), "scale_y": float(scale_y),
+        "scale": float(scale),
         "rotation_deg": float(rotation_deg),
         "K_M_ratio_exp": float(ratio_exp), "K_M_ratio_dft": float(ratio_dft),
         "bands": final_params,
@@ -407,7 +427,7 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
     print("COMPLETE")
     print("=" * 60)
     print(f"  T = [[{T[0,0]:.6f}, {T[0,1]:.6f}], [{T[1,0]:.6f}, {T[1,1]:.6f}]]")
-    print(f"  scale_x={scale_x:.4f}, scale_y={scale_y:.4f}, rotation={rotation_deg:.2f}°")
+    print(f"  isotropic scale={scale:.4f}, rotation={rotation_deg:.2f}°")
     print(f"  Stage 1 shared: {best_shared_off:+.4f} eV, BSFI={best_shared_score:.4f}")
     for ib, p in enumerate(final_params):
         print(f"    Band {ib}: offset={p['offset']:.4f} eV, BSFI={p['bsfi_score']:.4f}")

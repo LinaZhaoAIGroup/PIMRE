@@ -135,7 +135,7 @@ DEFAULTS = {
                         "path_ridge": 0.8},
             "ridge_sigma": 0.1,
         },
-        "offset_mode": "hierarchical",
+        "offset_mode": "shared",
         "smooth_sigma": [0.5, 0.5, 0.1],
     },
 }
