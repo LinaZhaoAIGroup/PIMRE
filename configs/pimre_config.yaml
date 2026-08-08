@@ -84,6 +84,9 @@ mrf:
   - 0.5
   - 0.1
 preprocessing:
+  # method: 'kdtree' (KD-tree interpolation, original) or 'quadrant'
+  #         (1/4-BZ crop + mirror symmetrization, default flip on)
+  method: kdtree
   auto_grid: true
   kd_radius: 0.05
   n_rotations: 6
@@ -92,5 +95,8 @@ preprocessing:
   sign_correct: false
   sort_axes: true
   stride: 10
+  quadrant:
+    flip_kx: true
+    flip_ky: true
 sample:
   name: RbTiBi

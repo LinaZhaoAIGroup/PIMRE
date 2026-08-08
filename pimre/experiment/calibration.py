@@ -136,6 +136,74 @@ def RotateCoordinates(KX, KY, theta=60, KX_Shift=0, KY_Shift=0):
     return KX_rotated + KX_Shift, KY_rotated + KY_Shift
 
 
+# --- Quadrant symmetrization ---
+
+
+def quadrant_symmetrize(bands, KX, KY, flip_kx=True, flip_ky=True,
+                        kx_grid=None, ky_grid=None):
+    """Reconstruct the full Brillouin zone from its 1/4 (kx>=0, ky>=0) crop.
+
+    Scattered momentum points (KX, KY) with Gamma at the origin are cropped
+    to the first quadrant, mirrored across the kx=0 / ky=0 axes (flip_kx /
+    flip_ky, both on by default) and binned onto the regular output grid.
+    Copies landing in the same bin are averaged.
+
+    Parameters
+    ----------
+    bands : 2D array
+        Intensity per (kx_angle, ky_angle) pixel of a single energy layer.
+    KX, KY : 2D array
+        Momentum coordinates of each pixel (scattered points).
+    flip_kx : bool
+        Mirror across the ky=0 axis (expand into kx<0).
+    flip_ky : bool
+        Mirror across the kx=0 axis (expand into ky<0).
+    kx_grid, ky_grid : 2D array or None
+        Target regular grid; if None, inferred from the mirrored points.
+
+    Returns
+    -------
+    E_Mon : 2D array
+        Symmetrized intensity on the regular grid (NaN filled with 0).
+    """
+    mask = (KX >= 0) & (KY >= 0)
+    pts = np.column_stack((KX[mask], KY[mask]))
+    vals = bands[mask]
+
+    kx, ky, v = pts[:, 0], pts[:, 1], vals
+    if flip_kx:
+        kx = np.concatenate((kx, -kx))
+        ky = np.concatenate((ky, ky))
+        v = np.concatenate((v, v))
+    if flip_ky:
+        kx = np.concatenate((kx, kx))
+        ky = np.concatenate((ky, -ky))
+        v = np.concatenate((v, v))
+
+    if kx_grid is None or ky_grid is None:
+        n = int(np.ceil(np.max(np.abs(kx))))
+        kx_out = np.linspace(-n, n, 2 * n + 1)
+        ky_out = np.linspace(-n, n, 2 * n + 1)
+    else:
+        kx_out = kx_grid[:, 0] if kx_grid.ndim == 2 else kx_grid
+        ky_out = ky_grid[0, :] if ky_grid.ndim == 2 else ky_grid
+
+    nx, ny = kx_out.shape[0], ky_out.shape[0]
+    kx_edges = (kx_out[:-1] + kx_out[1:]) / 2
+    ky_edges = (ky_out[:-1] + ky_out[1:]) / 2
+    ix = np.clip(np.digitize(kx, kx_edges), 0, nx - 1)
+    iy = np.clip(np.digitize(ky, ky_edges), 0, ny - 1)
+
+    sums = np.zeros((nx, ny))
+    counts = np.zeros((nx, ny))
+    np.add.at(sums, (ix, iy), v)
+    np.add.at(counts, (ix, iy), 1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        E_Mon = np.divide(sums, counts)
+    E_Mon = np.nan_to_num(E_Mon, nan=0.0)
+    return E_Mon
+
+
 # --- Multi-layer expansion ---
 
 

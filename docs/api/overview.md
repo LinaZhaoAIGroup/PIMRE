@@ -36,6 +36,7 @@ Experimental data preprocessing.
 | `pimre.experiment.calibration` | Angle-to-momentum, KD-interpolation, rotation |
 | `Angle2Mon(E_grid, X_Angle, Y_Angle)` | Angle to momentum conversion |
 | `KDInterp(bands, KX, KY, ...)` | KD-tree based interpolation |
+| `quadrant_symmetrize(bands, KX, KY, flip_kx, flip_ky, ...)` | 1/4-BZ crop + mirror symmetrization binning |
 | `RotateCoordinates(KX, KY, theta)` | 2D coordinate rotation |
 | `save_preprocessed_h5(path, E, kx, ky, V)` | Save preprocessed HDF5 |
 

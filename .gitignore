@@ -6,6 +6,7 @@ test/*.png
 test/*.json
 test/*.txt
 test/*.yaml
+test/glm_image_eval.py
 .venv/
 progress.md
 task_plan.md

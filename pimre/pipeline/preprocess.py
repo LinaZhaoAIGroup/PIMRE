@@ -3,9 +3,9 @@
 Replicates the workflow from 2.exp_data_pre.ipynb:
 1. Load raw experimental HDF5 data
 2. Angle-to-momentum conversion
-3. Multi-layer rotation and expansion
-4. KD-interpolation for all layers
-5. Save preprocessed data as HDF5
+3a. (method="kdtree") Multi-layer rotation and KD-interpolation
+3b. (method="quadrant") 1/4-BZ crop, mirror symmetrization, binning
+4. Save preprocessed data as HDF5
 """
 
 import h5py
@@ -15,6 +15,7 @@ from pimre.experiment.calibration import (
     Angle2Mon,
     KDInterp,
     RotateCoordinates,
+    quadrant_symmetrize,
     save_preprocessed_h5,
 )
 
@@ -34,6 +35,7 @@ def compute_grid(cfg):
     ar = cfg["arpes"]
     cal = cfg["calibration"]
     pp = cfg["preprocessing"]
+    method = pp.get("method", "kdtree")
 
     with h5py.File(ar["path"], "r") as f:
         parts = ar["dataset"].split("/")
@@ -89,28 +91,39 @@ def compute_grid(cfg):
         KY_abs[:, :, ymask] *= -1
         KX, KY = KX_abs, KY_abs
 
-    n_rot = pp["n_rotations"]
-    bands_rep = np.repeat(bands[:, :, np.newaxis], n_rot, axis=2)
-    bands_rep = bands_rep.reshape(bands.shape[0], bands.shape[1], -1)
+    if method == "quadrant":
+        bands_rep = bands
+        KX_rot = KX
+        KY_rot = KY
+    else:
+        n_rot = pp["n_rotations"]
+        bands_rep = np.repeat(bands[:, :, np.newaxis], n_rot, axis=2)
+        bands_rep = bands_rep.reshape(bands.shape[0], bands.shape[1], -1)
 
-    KX_rot = np.zeros((KX.shape[0], KX.shape[1], KX.shape[2] * n_rot))
-    KY_rot = np.zeros_like(KX_rot)
-    KX_rot[:, :, :KX.shape[2]] = KX
-    KY_rot[:, :, :KY.shape[2]] = KY
-    for i in range(1, n_rot):
-        kxr, kyr = RotateCoordinates(KX, KY, theta=60 * i)
-        KX_rot[:, :, i * KX.shape[2]:(i + 1) * KX.shape[2]] = kxr
-        KY_rot[:, :, i * KY.shape[2]:(i + 1) * KY.shape[2]] = kyr
+        KX_rot = np.zeros((KX.shape[0], KX.shape[1], KX.shape[2] * n_rot))
+        KY_rot = np.zeros_like(KX_rot)
+        KX_rot[:, :, :KX.shape[2]] = KX
+        KY_rot[:, :, :KY.shape[2]] = KY
+        for i in range(1, n_rot):
+            kxr, kyr = RotateCoordinates(KX, KY, theta=60 * i)
+            KX_rot[:, :, i * KX.shape[2]:(i + 1) * KX.shape[2]] = kxr
+            KY_rot[:, :, i * KY.shape[2]:(i + 1) * KY.shape[2]] = kyr
 
     if pp.get("auto_grid", False):
         n_out = np.max(KX_rot.shape)
     else:
         n_out = min(np.max(KX_rot.shape), pp["output_grid"])
-    kx_out = np.linspace(np.min(KX_rot), np.max(KX_rot), n_out)
-    ky_out = np.linspace(np.min(KY_rot), np.max(KY_rot), n_out)
+    if method == "quadrant":
+        kx_max = float(np.max(np.abs(KX)))
+        ky_max = float(np.max(np.abs(KY)))
+        kx_out = np.linspace(-kx_max, kx_max, n_out)
+        ky_out = np.linspace(-ky_max, ky_max, n_out)
+    else:
+        kx_out = np.linspace(np.min(KX_rot), np.max(KX_rot), n_out)
+        ky_out = np.linspace(np.min(KY_rot), np.max(KY_rot), n_out)
     kx_out = kx_out - cal["kx_grid_shift"]
     ky_out = ky_out - cal["ky_grid_shift"]
-    print(f"  Output grid: {n_out}×{n_out}")
+    print(f"  Output grid: {n_out}×{n_out} (method={method})")
 
     return E_grid, bands, kx_angle, ky_angle, bands_rep, KX_rot, KY_rot, kx_out, ky_out
 
@@ -137,7 +150,15 @@ def preprocess_full(cfg, E_grid, bands_rep, KX_rot, KY_rot, kx_out, ky_out):
         Interpolated intensity data (E, kx, ky).
     """
     pp = cfg["preprocessing"]
-    print(f"  KD-interpolation on {bands_rep.shape[0]} layers (stride={pp['stride']}) ...")
+    method = pp.get("method", "kdtree")
+    if method == "quadrant":
+        qcfg = pp.get("quadrant", {})
+        flip_kx = bool(qcfg.get("flip_kx", True))
+        flip_ky = bool(qcfg.get("flip_ky", True))
+        print(f"  Quadrant symmetrization on {bands_rep.shape[0]} layers"
+              f" (flip_kx={flip_kx}, flip_ky={flip_ky}, stride={pp['stride']}) ...")
+    else:
+        print(f"  KD-interpolation on {bands_rep.shape[0]} layers (stride={pp['stride']}) ...")
     n_out = kx_out.shape[0]
     kxm, kym = np.meshgrid(kx_out, ky_out, indexing="ij")
     E_Mon = np.zeros((bands_rep.shape[0], n_out, n_out))
@@ -145,8 +166,14 @@ def preprocess_full(cfg, E_grid, bands_rep, KX_rot, KY_rot, kx_out, ky_out):
     for i in range(0, bands_rep.shape[0], stride):
         if i % 50 == 0:
             print(f"    layer {i}/{bands_rep.shape[0]}")
-        E_Mon[i] = KDInterp(bands_rep[i], KX_rot[i], KY_rot[i],
-                            radius=pp["kd_radius"], kx_grid=kxm, ky_grid=kym)
+        if method == "quadrant":
+            E_Mon[i] = quadrant_symmetrize(
+                bands_rep[i], KX_rot[i], KY_rot[i],
+                flip_kx=flip_kx, flip_ky=flip_ky,
+                kx_grid=kxm, ky_grid=kym)
+        else:
+            E_Mon[i] = KDInterp(bands_rep[i], KX_rot[i], KY_rot[i],
+                                radius=pp["kd_radius"], kx_grid=kxm, ky_grid=kym)
     for i in range(bands_rep.shape[0]):
         if i % stride != 0:
             lo = (i // stride) * stride

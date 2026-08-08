@@ -107,6 +107,7 @@ DEFAULTS = {
         },
     },
     "preprocessing": {
+        "method": "kdtree",
         "output_grid": 200,
         "kd_radius": 0.05,
         "n_rotations": 6,
@@ -115,6 +116,10 @@ DEFAULTS = {
         "sort_axes": False,
         "sign_correct": False,
         "auto_grid": False,
+        "quadrant": {
+            "flip_kx": True,
+            "flip_ky": True,
+        },
     },
     "mrf": {
         "num_epochs": 10,

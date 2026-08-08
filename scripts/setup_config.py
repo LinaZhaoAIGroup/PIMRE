@@ -56,7 +56,7 @@ class ArpesPreviewCanvas(FigureCanvas):
         self.setParent(parent)
         self.setMinimumSize(400, 300)
 
-    def update(self, bands, kx_angle, ky_angle, layer=10):
+    def show_bands(self, bands, kx_angle, ky_angle, layer=10):
         self.ax.clear()
         if bands is None:
             self.draw()
@@ -323,7 +323,7 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
                 bands = d[:]
             kx = _build_axis(ar["kx_angle"], ar["kx_angle"].get("flip", False))
             ky = _build_axis(ar["ky_angle"], ar["ky_angle"].get("flip", False))
-            self._preview.update(bands, kx, ky, layer=10)
+            self._preview.show_bands(bands, kx, ky, layer=10)
             self._preview_bands = bands
             self._preview_kx = kx
             self._preview_ky = ky
@@ -523,16 +523,27 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         w4, self._e_bsfi_wcorr = _labeled_edit("w_corr:", width=80)
         w5, self._e_bsfi_wint = _labeled_edit("w_int:", width=80)
         w6, self._e_bsfi_wsnr = _labeled_edit("w_snr:", width=80)
-        row2.addWidget(w4); row2.addWidget(w5); row2.addWidget(w6); row2.addStretch()
+        w7, self._e_bsfi_wridge = _labeled_edit("w_ridge:", width=80)
+        row2.addWidget(w4); row2.addWidget(w5); row2.addWidget(w6); row2.addWidget(w7); row2.addStretch()
         g.addLayout(row2)
+        row2b = QtWidgets.QHBoxLayout()
+        w8, self._e_bsfi_wpath = _labeled_edit("w_path_ridge:", width=100)
+        w9, self._e_bsfi_rsigma = _labeled_edit("ridge_sigma:", width=100)
+        row2b.addWidget(w8); row2b.addWidget(w9); row2b.addStretch()
+        g.addLayout(row2b)
         lay.addWidget(g)
 
         lay.addWidget(_hsep())
 
         row = QtWidgets.QHBoxLayout()
         w1, self._e_smooth = _labeled_edit("Smooth sigma (kx,ky,E):", width=180)
+        # Energy offset is shared by all bands (fixed offset mode): the
+        # pipeline shifts every band by the same BSFI-optimized value.
         w2, self._e_offset_mode = _labeled_edit("Offset mode:", width=120)
-        row.addWidget(w1); row.addWidget(w2); row.addStretch()
+        self._e_offset_mode.setReadOnly(True)
+        self._e_offset_mode.setText("shared")
+        w3, self._e_max_shift = _labeled_edit("max_shift:", width=80)
+        row.addWidget(w1); row.addWidget(w2); row.addWidget(w3); row.addStretch()
         lay.addLayout(row)
 
         lay.addStretch()
@@ -563,6 +574,15 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         w_a, self._cb_auto_grid = _labeled_check("Auto grid", False)
         row2.addWidget(w_s); row2.addWidget(w_c); row2.addWidget(w_a); row2.addStretch()
         g.addLayout(row2)
+        row3 = QtWidgets.QHBoxLayout()
+        row3.addWidget(QtWidgets.QLabel("Method:"))
+        self._cb_method = QtWidgets.QComboBox()
+        self._cb_method.addItems(["kdtree", "quadrant"])
+        row3.addWidget(self._cb_method)
+        w_fx, self._cb_flip_kx = _labeled_check("Flip kx", True)
+        w_fy, self._cb_flip_ky = _labeled_check("Flip ky", True)
+        row3.addWidget(w_fx); row3.addWidget(w_fy); row3.addStretch()
+        g.addLayout(row3)
         lay.addWidget(g)
 
         lay.addStretch()
@@ -664,21 +684,31 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         bsfi["weights"]["correlation"] = float(self._e_bsfi_wcorr.text() or 0.6)
         bsfi["weights"]["intensity"] = float(self._e_bsfi_wint.text() or 0.3)
         bsfi["weights"]["snr"] = float(self._e_bsfi_wsnr.text() or 0.1)
+        bsfi["weights"]["ridge"] = float(self._e_bsfi_wridge.text() or 0.5)
+        bsfi["weights"]["path_ridge"] = float(self._e_bsfi_wpath.text() or 0.8)
+        bsfi["ridge_sigma"] = float(self._e_bsfi_rsigma.text() or 0.1)
 
         smooth_str = self._e_smooth.text()
         if smooth_str:
             self.cfg["mrf"]["smooth_sigma"] = [float(x) for x in smooth_str.replace(",", " ").split()]
-        self.cfg["mrf"]["offset_mode"] = self._e_offset_mode.text() or "hierarchical"
+        # Fixed offset mode: all bands share one BSFI-optimized offset.
+        self.cfg["mrf"]["offset_mode"] = "shared"
+        if self._e_max_shift.text():
+            self.cfg["mrf"]["max_shift"] = int(self._e_max_shift.text())
 
         pp = self.cfg["preprocessing"]
         pp["output_path"] = self._e_out_path.text()
         pp["output_grid"] = int(self._e_out_grid.text() or 200)
+        pp["method"] = self._cb_method.currentText()
         pp["kd_radius"] = float(self._e_kd_radius.text() or 0.05)
         pp["stride"] = int(self._e_stride.text() or 10)
         pp["n_rotations"] = int(self._e_nrot.text() or 6)
         pp["sort_axes"] = self._cb_sort_axes.isChecked()
         pp["sign_correct"] = self._cb_sign_correct.isChecked()
         pp["auto_grid"] = self._cb_auto_grid.isChecked()
+        pp.setdefault("quadrant", {})
+        pp["quadrant"]["flip_kx"] = self._cb_flip_kx.isChecked()
+        pp["quadrant"]["flip_ky"] = self._cb_flip_ky.isChecked()
 
     def _load_to_ui(self):
         self._e_name.setText(self.cfg["sample"]["name"])
@@ -728,19 +758,28 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         self._e_bsfi_wcorr.setText(str(bsfi["weights"]["correlation"]))
         self._e_bsfi_wint.setText(str(bsfi["weights"]["intensity"]))
         self._e_bsfi_wsnr.setText(str(bsfi["weights"]["snr"]))
+        self._e_bsfi_wridge.setText(str(bsfi["weights"].get("ridge", 0.5)))
+        self._e_bsfi_wpath.setText(str(bsfi["weights"].get("path_ridge", 0.8)))
+        self._e_bsfi_rsigma.setText(str(bsfi.get("ridge_sigma", 0.1)))
 
         self._e_smooth.setText(", ".join(str(x) for x in self.cfg["mrf"]["smooth_sigma"]))
-        self._e_offset_mode.setText(self.cfg["mrf"]["offset_mode"])
+        self._e_offset_mode.setText(self.cfg["mrf"].get("offset_mode", "shared"))
+        self._e_max_shift.setText(str(self.cfg["mrf"].get("max_shift", 10)))
 
         pp = self.cfg["preprocessing"]
         self._e_out_path.setText(pp["output_path"])
         self._e_out_grid.setText(str(pp["output_grid"]))
+        method = pp.get("method", "kdtree")
+        self._cb_method.setCurrentText(method if method in ("kdtree", "quadrant") else "kdtree")
         self._e_kd_radius.setText(str(pp["kd_radius"]))
         self._e_stride.setText(str(pp["stride"]))
         self._e_nrot.setText(str(pp["n_rotations"]))
         self._cb_sort_axes.setChecked(pp.get("sort_axes", False))
         self._cb_sign_correct.setChecked(pp.get("sign_correct", False))
         self._cb_auto_grid.setChecked(pp.get("auto_grid", False))
+        q = pp.get("quadrant", {})
+        self._cb_flip_kx.setChecked(q.get("flip_kx", True))
+        self._cb_flip_ky.setChecked(q.get("flip_ky", True))
 
     # ── actions ─────────────────────────────────────────────────────
 
