@@ -11,4 +11,4 @@ test/glm_image_eval.py
 progress.md
 task_plan.md
 findings.md
-__pycache__/
+__pycache__/notebooks/
