@@ -270,12 +270,18 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
     ky = data["ky"][1:-1]
     I = data["V"][1:-1, 1:-1, 1:-1]
 
-    if I.shape[0] == E.shape[0]:
+    # Exact-shape matching avoids the square-grid ambiguity of
+    # shape[0]-based heuristics.  The saved layout is (E, kx, ky).
+    if I.shape == (E.size, kx.size, ky.size):
         I_t = I
-    elif I.shape[0] == kx.shape[0]:
+    elif I.shape == (kx.size, ky.size, E.size):
         I_t = np.transpose(I, (2, 0, 1))
+    elif I.shape == (kx.size, E.size, ky.size):
+        I_t = np.transpose(I, (1, 0, 2))
     else:
-        I_t = np.transpose(I, (2, 0, 1))
+        raise ValueError(
+            f"Unexpected data layout {I.shape} for axes E={E.size}, "
+            f"kx={kx.size}, ky={ky.size} in {exp_data}")
 
     mrf = MrfRec(E=E, kx=kx, ky=ky, I=np.transpose(I_t, (1, 2, 0)), eta=0.12,
                  max_shift=MAX_SHIFT)
@@ -460,22 +466,28 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
         eta = bands_cfg[ind_band]["eta"]
         final_offset = float(best_offsets[ind_band])
         mrf.eta = eta
-        E0 = np.reshape(dft_bands[ind_band] + final_offset, (kx.shape[0], ky.shape[0]))
+        raw_band = dft_bands[ind_band]
+        invalid_init = ~np.isfinite(raw_band)
+        E0_raw = raw_band + final_offset
+        # Pixels without DFT coverage (NaN) get a neutral mid-window start;
+        # they are unconstrained by DFT and are masked out after the fit.
+        E0 = np.where(np.isfinite(E0_raw), E0_raw, 0.5 * (E.min() + E.max()))
         EE, EE0 = np.meshgrid(E, E0)
         mrf.indEb = np.argmin(np.abs(EE - EE0), 1).reshape(E0.shape)
         mrf.indE0 = mrf.indEb.copy()
         mrf.delHist()
         mrf.iter_para(num_epoch=NUM_EPOCHS, updateLogP=True, disable_tqdm=True)
         recon[ind_band] = mrf.getEb()
-        bsfi_b = _bsfi(recon[ind_band])
 
         sym_band(ind_band, recon, mrf.kx, mrf.ky, mrf.lengthKx, mrf.lengthKy)
 
         # Pixels whose band energy lies outside the measured window have no
-        # experimental constraint; mark them NaN instead of clamping to the
-        # energy-axis edge (which would produce a spurious flat band).
-        outside = (E0 > E.max()) | (E0 < E.min())
+        # experimental constraint; pixels without DFT coverage have no prior.
+        # Mark both NaN instead of clamping to the energy-axis edge (which
+        # would produce a spurious flat band).
+        outside = (E0_raw > E.max()) | (E0_raw < E.min()) | invalid_init
         recon[ind_band][outside] = np.nan
+        bsfi_b = _bsfi(recon[ind_band])
 
         final_params.append({
             "band": ind_band, "dft_band": int(band_idx[ind_band]),

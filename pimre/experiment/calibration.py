@@ -21,7 +21,8 @@ def Angle2Mon(E_grid, X_Angle, Y_Angle, X_Shift=0, Y_Shift=0, work_function=16.0
     Parameters
     ----------
     E_grid : 1D array
-        Energy grid (kinetic energy in eV).
+        Energy grid: binding energy in eV relative to E_F (positive below
+        E_F).
     X_Angle : 1D array
         Angles in X direction (degrees), typically alpha + beta.
     Y_Angle : 1D array
@@ -29,12 +30,17 @@ def Angle2Mon(E_grid, X_Angle, Y_Angle, X_Shift=0, Y_Shift=0, work_function=16.0
     X_Shift, Y_Shift : float
         Angle shifts in X and Y directions.
     work_function : float
-        Work function in eV.
+        NOTE: despite the name this is the kinetic energy at the Fermi
+        level, i.e. hnu - Phi_analyzer in eV (e.g. He-I lamp 21.22 eV minus
+        an ~5.2 eV analyzer work function gives ~16 eV).  E_kin = this
+        value - binding energy.
 
     Returns
     -------
     KX, KY : ndarray
-        3D arrays of momentum coordinates (E, kx_angle, ky_angle).
+        3D arrays of momentum coordinates (E, kx_angle, ky_angle).  KY is
+        approximated without the cos(X) factor; the error is negligible for
+        |angles| < ~10 deg and reaches a few percent at ±20 deg.
     """
     X_Angle = X_Angle - X_Shift
     Y_Angle = Y_Angle - Y_Shift

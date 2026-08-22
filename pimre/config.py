@@ -119,7 +119,6 @@ DEFAULTS = {
         "stride": 10,
         "output_path": "",
         "sort_axes": False,
-        "sign_correct": False,
         "auto_grid": False,
         "quadrant": {
             "flip_kx": True,

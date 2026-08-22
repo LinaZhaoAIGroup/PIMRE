@@ -9,6 +9,11 @@ import numpy as np
 def sym_band(ind_band, recon, kx, ky, lengthKx, lengthKy):
     """Symmetrize a reconstructed band with respect to kx and ky axes.
 
+    The mirror pivot is taken as the first strictly-positive axis value, so
+    the pairing (indXRef-d, indXRef+d) reproduces true mirror partners only
+    when the axis is symmetric about k=0 on the grid (the case for the
+    linspace output grids of the preprocessing stage).
+
     Parameters
     ----------
     ind_band : int

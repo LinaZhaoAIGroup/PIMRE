@@ -206,8 +206,14 @@ class CalibrateHspsWindow(QtWidgets.QMainWindow):
             kx = data["kx"]
             ky = data["ky"]
             V = data["V"]
-            if V.shape[0] == kx.shape[0]:
+            # Exact-shape matching: the saved layout is (E, kx, ky); a
+            # shape[0]-based heuristic mis-transposes square grids.
+            if V.shape == (kx.size, ky.size, E.size):
                 V = np.transpose(V, (2, 0, 1))
+            elif V.shape != (E.size, kx.size, ky.size):
+                raise ValueError(
+                    f"Unexpected data layout {V.shape} for axes E={E.size}, "
+                    f"kx={kx.size}, ky={ky.size} in {prep_path}")
             self.data = V
             self.E_grid = E
             self.n_bands = V.shape[0]

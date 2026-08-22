@@ -256,9 +256,10 @@ def build_band_map_3d(bz_coords, energy_bands, n_x=70, n_y=70, n_plus=3, scaling
     Returns
     -------
     bandmap : ndarray
-        (n_bands, n_x, n_y) band map.
+        (n_bands, n_x + 2*n_plus, n_y + 2*n_plus) band map; uncovered
+        cells are NaN.
     carcoo : ndarray
-        (2, n_x, n_y) coordinate grid.
+        (2, n_x + 2*n_plus, n_y + 2*n_plus) coordinate grid.
     """
     max_x = np.max(bz_coords[:, 0])
     min_x = np.min(bz_coords[:, 0])
@@ -268,34 +269,40 @@ def build_band_map_3d(bz_coords, energy_bands, n_x=70, n_y=70, n_plus=3, scaling
     step_x = (max_x - min_x) / n_x
     step_y = (max_y - min_y) / n_y
 
+    # Integer-counted cell origins: np.arange with float steps can drift by
+    # one cell and break the reshape below.
+    nxt = n_x + 2 * n_plus
+    nyt = n_y + 2 * n_plus
+
     BANDMAP = []
     CARCOO = []
 
-    for i in np.arange(min_x - n_plus * step_x, max_x + n_plus * step_x, step_x):
-        x_end = i + scaling_factor * step_x
-        x_coord = (i + x_end) / 2
-        for j in np.arange(min_y - n_plus * step_y, max_y + n_plus * step_y, step_y):
-            y_end = j + scaling_factor * step_y
-            y_coord = (j + y_end) / 2
+    for i in range(nxt):
+        x_lo = min_x + (i - n_plus) * step_x
+        x_end = x_lo + scaling_factor * step_x
+        x_coord = (x_lo + x_end) / 2
+        for j in range(nyt):
+            y_lo = min_y + (j - n_plus) * step_y
+            y_end = y_lo + scaling_factor * step_y
+            y_coord = (y_lo + y_end) / 2
             mask = (
-                (bz_coords[:, 0] >= i)
+                (bz_coords[:, 0] >= x_lo)
                 & (bz_coords[:, 0] < x_end)
-                & (bz_coords[:, 1] >= j)
+                & (bz_coords[:, 1] >= y_lo)
                 & (bz_coords[:, 1] < y_end)
             )
             if np.any(mask):
                 indices = np.where(mask)[0]
-                indices = indices % energy_bands.shape[0]
                 avg_band = np.nanmean(energy_bands[indices], axis=0)
             else:
-                avg_band = np.zeros(energy_bands.shape[1])
+                # Uncovered cells stay NaN so that downstream stages can
+                # distinguish "no DFT data" from a real band at 0 eV (E_F).
+                avg_band = np.full(energy_bands.shape[1], np.nan)
             BANDMAP.append(avg_band)
             CARCOO.append([x_coord, y_coord])
 
-    length = n_x + 2 * n_plus
-    width = len(BANDMAP) // length
-    BANDMAP = np.array(BANDMAP).reshape((length, width, energy_bands.shape[1]))
-    CARCOO = np.array(CARCOO).reshape((length, width, 2))
+    BANDMAP = np.array(BANDMAP).reshape((nxt, nyt, energy_bands.shape[1]))
+    CARCOO = np.array(CARCOO).reshape((nxt, nyt, 2))
     BANDMAP = np.moveaxis(BANDMAP, -1, 0)
     CARCOO = np.moveaxis(CARCOO, -1, 0)
     return BANDMAP, CARCOO
@@ -374,7 +381,8 @@ def load_band_map_h5(filepath, drop_top_bands=None):
     -------
     E_dft : ndarray
         Stacked band structure (n_bands, nkx, nky) in descending
-        Gamma-point energy order.
+        Gamma-point energy order. Cells without DFT coverage are NaN
+        (NOT zero — 0 eV would masquerade as a flat band at E_F).
     evb, ecb : ndarray
         Valence and conduction band data.
     kx, ky : 1D array
@@ -383,8 +391,8 @@ def load_band_map_h5(filepath, drop_top_bands=None):
     import h5py
 
     with h5py.File(filepath, "r") as f:
-        evb = np.nan_to_num(f["bands/evb"][:])
-        ecb = np.nan_to_num(f["bands/ecb"][:])
+        evb = f["bands/evb"][:]
+        ecb = f["bands/ecb"][:]
         kx = f["axes/kx"][:]
         ky = f["axes/ky"][:]
 

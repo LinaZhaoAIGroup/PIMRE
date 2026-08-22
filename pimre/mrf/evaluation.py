@@ -4,70 +4,8 @@ Extracted from 4.mrf.ipynb and mrf_bsfi_pipeline.py.
 """
 
 import numpy as np
-from scipy.interpolate import RectBivariateSpline, RegularGridInterpolator
-
-
-def theory_data_expand(ind, kx_dft, ky_dft, E_dft, padded_kx, padded_ky, new_scale=900):
-    """Expand DFT band data to match experimental grid size.
-
-    Parameters
-    ----------
-    ind : int
-        Band index.
-    kx_dft, ky_dft : 1D array
-        DFT momentum axes.
-    E_dft : 3D array
-        DFT band data (nbands, kx, ky).
-    padded_kx, padded_ky : 1D array
-        Target momentum axes.
-    new_scale : int
-        Target grid size.
-
-    Returns
-    -------
-    Ek_scaled : 2D array
-        Interpolated band data.
-    """
-    intFunc_th = RegularGridInterpolator(
-        (kx_dft, ky_dft), E_dft[ind, :, :], bounds_error=False, fill_value=0
-    )
-    kxx, kyy = np.meshgrid(padded_kx, padded_ky, indexing="ij")
-    Ek_scaled = intFunc_th(np.column_stack((kxx.ravel(), kyy.ravel())))
-    return Ek_scaled.reshape((new_scale, new_scale))
-
-
-def expand_dft_bands(E_dft, kx_dft, ky_dft, target_kx, target_ky):
-    """Expand all DFT bands to match experimental grid.
-
-    Parameters
-    ----------
-    E_dft : 3D array
-        DFT band data.
-    kx_dft, ky_dft : 1D array
-        DFT momentum axes.
-    target_kx, target_ky : 1D array
-        Target momentum axes.
-
-    Returns
-    -------
-    E_dft_expanded : 3D array
-        Expanded DFT band data.
-    kx_dft_new, ky_dft_new : 1D array
-        New momentum axes.
-    """
-    from scipy.interpolate import interp1d
-
-    interp_kx = interp1d(np.linspace(0, 1, kx_dft.shape[0]), kx_dft, kind="linear")
-    interp_ky = interp1d(np.linspace(0, 1, ky_dft.shape[0]), ky_dft, kind="linear")
-    padded_kx = interp_kx(np.linspace(0, 1, target_kx.shape[0]))
-    padded_ky = interp_ky(np.linspace(0, 1, target_ky.shape[0]))
-
-    E_dft_expanded = np.zeros((E_dft.shape[0], target_kx.shape[0], target_ky.shape[0]))
-    for ind in range(E_dft.shape[0]):
-        E_dft_expanded[ind] = theory_data_expand(
-            ind, kx_dft, ky_dft, E_dft, padded_kx, padded_ky, target_kx.shape[0]
-        )
-    return E_dft_expanded, padded_kx, padded_ky
+from scipy.interpolate import RectBivariateSpline
+from scipy.spatial import cKDTree
 
 
 def ridge_alignment_score(E0, I_t, E_arr, sigma=0.1, window=0.15):
@@ -105,8 +43,15 @@ def ridge_alignment_score(E0, I_t, E_arr, sigma=0.1, window=0.15):
     dE = abs(E_arr[1] - E_arr[0])
     hw = max(1, int(round(window / dE)))
 
+    # NaN band points (outside window / no DFT coverage) are excluded from
+    # the mean; their indices are garbage but deterministically clipped.
+    valid = np.isfinite(E0)
+
     skx, sky = E0.shape
     e_idx = np.interp(E0.ravel(), E_arr, np.arange(nE))
+    # NaN entries would raise a cast warning / platform-dependent ints;
+    # substitute a safe index — those points are masked out below anyway.
+    e_idx = np.where(np.isnan(e_idx), 0.0, e_idx)
     ind = np.round(e_idx).astype(int).clip(0, nE - 1).reshape(skx, sky)
 
     rows = np.arange(skx)[:, None]
@@ -126,8 +71,9 @@ def ridge_alignment_score(E0, I_t, E_arr, sigma=0.1, window=0.15):
     # get zero score instead of absorbing the band into noise.
     thr = 0.05 * np.max(prof)
     score[I_peak < thr] = 0.0
+    score[~valid] = np.nan
 
-    return float(np.mean(score))
+    return float(np.nanmean(score))
 
 
 def path_ridge_score(pathD, band_path, E_arr, sigma=0.1, window=0.15):
@@ -231,23 +177,33 @@ def compute_bsfi_2d(E0, I_t, E_arr, stride=4, w_corr=0.6, w_int=0.3, w_snr=0.1,
     I_t_s = I_t[:, ::stride, ::stride]
     skx, sky = E0_s.shape
 
-    e_idx = np.interp(E0_s.ravel(), E_arr, np.arange(nE))
+    # NaN band points (outside window / no DFT coverage) are excluded from
+    # all mean-based metrics; for gradient/correlation metrics they are
+    # neutral-filled with the mean of the valid energies.
+    valid_s = np.isfinite(E0_s)
+    if not np.any(valid_s):
+        return 0.0
+    fill_val = float(np.mean(E0_s[valid_s]))
+    E0_f = np.where(valid_s, E0_s, fill_val)
+
+    e_idx = np.interp(E0_f.ravel(), E_arr, np.arange(nE))
     indEb = np.round(e_idx).astype(int).clip(0, nE - 1).reshape(skx, sky)
 
     I_band = I_t_s[indEb, np.arange(skx)[:, None], np.arange(sky)[None, :]]
 
     denom = I_t_s.max() - I_t_s.min()
-    intensity_ratio = (I_band.mean() - I_t_s.min()) / denom if denom > 0 else 0
+    intensity_ratio = (I_band[valid_s].mean() - I_t_s.min()) / denom if denom > 0 else 0
 
-    snr = I_band.mean() / I_band.std() if I_band.std() > 0 else 0
+    snr = (I_band[valid_s].mean() / I_band[valid_s].std()
+           if I_band[valid_s].std() > 0 else 0)
 
-    dE_dkx = np.gradient(E0_s, axis=0)
+    dE_dkx = np.gradient(E0_f, axis=0)
     dI_dkx = np.gradient(I_band, axis=0)
     corr_x = np.corrcoef(dE_dkx.ravel(), dI_dkx.ravel())[0, 1]
     if np.isnan(corr_x):
         corr_x = 0.0
 
-    dE_dky = np.gradient(E0_s, axis=1)
+    dE_dky = np.gradient(E0_f, axis=1)
     dI_dky = np.gradient(I_band, axis=1)
     corr_y = np.corrcoef(dE_dky.ravel(), dI_dky.ravel())[0, 1]
     if np.isnan(corr_y):
@@ -348,15 +304,37 @@ def map_dft_bands(E_dft_orig, kx_dft_orig, ky_dft_orig, kx, ky, T_inv, band_indi
     Returns
     -------
     dft_bands : list of 2D arrays
-        DFT bands mapped to experimental grid.
+        DFT bands mapped to the experimental grid. Points whose DFT source
+        is NaN (no band-map coverage) are NaN on the experimental grid as
+        well, so that uncovered regions cannot masquerade as real bands.
     """
     kxx, kyy = np.meshgrid(kx, ky, indexing="ij")
     pts_exp = np.column_stack((kxx.ravel(), kyy.ravel()))
     pts_dft = (T_inv @ pts_exp.T).T
 
+    # Validity is a spatial property of the DFT grid; propagate it to the
+    # experimental grid by nearest-neighbour lookup.
+    kxx_dft, kyy_dft = np.meshgrid(kx_dft_orig, ky_dft_orig, indexing="ij")
+    dft_coords = np.column_stack((kxx_dft.ravel(), kyy_dft.ravel()))
+
     dft_bands = []
     for ind in band_indices:
-        spline = RectBivariateSpline(kx_dft_orig, ky_dft_orig, E_dft_orig[ind, :, :], kx=1, ky=1, s=0)
+        band_data = E_dft_orig[ind, :, :]
+        valid = np.isfinite(band_data)
+        # RectBivariateSpline requires finite data: fill holes with the
+        # nearest VALID values (not zeros — those would bleed artificial
+        # E_F ridges across the coverage boundary), fit the spline, then
+        # mask the mapped result back to NaN outside coverage.
+        if not np.all(valid):
+            _, nn = cKDTree(dft_coords[valid.ravel()]).query(dft_coords[~valid.ravel()])
+            filled = band_data.copy()
+            filled[~valid] = band_data[valid][nn]
+        else:
+            filled = band_data
+        spline = RectBivariateSpline(kx_dft_orig, ky_dft_orig, filled, kx=1, ky=1, s=0)
         band_mapped = spline.ev(pts_dft[:, 0], pts_dft[:, 1]).reshape(kxx.shape)
+        _, idx = cKDTree(dft_coords).query(pts_dft)
+        valid_mapped = valid.ravel()[idx].reshape(kxx.shape)
+        band_mapped[~valid_mapped] = np.nan
         dft_bands.append(band_mapped)
     return dft_bands

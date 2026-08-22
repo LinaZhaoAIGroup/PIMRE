@@ -81,15 +81,6 @@ def compute_grid(cfg):
                        work_function=ar["work_function"])
     print(f"  KX shape: {KX.shape}")
 
-    if pp.get("sign_correct", False):
-        xmask = kx_angle < 0
-        ymask = ky_angle < 0
-        KX_abs, KY_abs = Angle2Mon(E_grid, np.abs(kx_angle), np.abs(ky_angle),
-                                   work_function=ar["work_function"])
-        KX_abs[:, xmask, :] *= -1
-        KY_abs[:, :, ymask] *= -1
-        KX, KY = KX_abs, KY_abs
-
     if method in ("quadrant", "direct"):
         bands_rep = bands
         KX_rot = KX
@@ -204,10 +195,15 @@ def preprocess_full(cfg, E_grid, bands_rep, KX_rot, KY_rot, kx_out, ky_out):
         else:
             E_Mon[i] = KDInterp(bands_rep[i], KX_rot[i], KY_rot[i],
                                 radius=pp["kd_radius"], kx_grid=kxm, ky_grid=kym)
+    # Layers at multiples of stride are computed; the rest are linearly
+    # interpolated between the surrounding computed layers.  hi is clamped
+    # to the last computed layer so that a tail beyond it extends that
+    # layer instead of blending into uninitialized zeros.
+    last_computed = ((bands_rep.shape[0] - 1) // stride) * stride
     for i in range(bands_rep.shape[0]):
         if i % stride != 0:
             lo = (i // stride) * stride
-            hi = min(lo + stride, bands_rep.shape[0] - 1)
+            hi = min(lo + stride, last_computed)
             frac = (i - lo) / (hi - lo) if hi > lo else 0
             E_Mon[i] = (1 - frac) * E_Mon[lo] + frac * E_Mon[hi]
 

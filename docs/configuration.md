@@ -92,8 +92,12 @@ documented below.
 | `n_rotations` | int | `6` | Number of rotational copies |
 | `stride` | int | `10` | Stride for KD-interpolation |
 | `sort_axes` | bool | `false` | Sort axes to increasing, flip data |
-| `sign_correct` | bool | `false` | Apply sign correction to momentum |
 | `auto_grid` | bool | `false` | Auto-determine grid size from KX/KY |
+| `method` | str | `"kdtree"` | Preprocessing method: `kdtree`, `quadrant`, or `direct` |
+| `quadrant.flip_kx` | bool | `true` | Mirror across ky=0 (expand into kx<0) |
+| `quadrant.flip_ky` | bool | `true` | Mirror across kx=0 (expand into ky<0) |
+| `quadrant.smooth_radius` | float | `0.02` | Neighborhood average radius before interpolation (Å⁻¹) |
+| `quadrant.fill_radius` | float | `0.03` | Max distance for nearest-fill of interpolation holes (Å⁻¹) |
 
 ## `mrf`
 

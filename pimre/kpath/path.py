@@ -162,11 +162,8 @@ def bandpath_map(bsvol, pathr=None, pathc=None, path_coords=None, eaxis=2,
     bpm : 2D array
         Band path map.
     """
-    try:
-        edim = bsvol.shape[eaxis]
-        bsvol = np.moveaxis(bsvol, eaxis, 2)
-    except Exception:
-        pass
+    edim = bsvol.shape[eaxis]
+    bsvol = np.moveaxis(bsvol, eaxis, 2)
 
     if method == "digital":
         if path_coords is not None:
