@@ -105,6 +105,11 @@ DEFAULTS = {
             "rotation_angle": 0.0,
             "scale": 1.0,
         },
+        "dft_hsps": {
+            "manual": False,
+            "rotation_angle": 0.0,
+            "scale": 1.0,
+        },
     },
     "preprocessing": {
         "method": "kdtree",
@@ -119,17 +124,19 @@ DEFAULTS = {
         "quadrant": {
             "flip_kx": True,
             "flip_ky": True,
+            "smooth_radius": 0.02,
+            "fill_radius": 0.03,
         },
     },
     "mrf": {
         "num_epochs": 10,
         "max_shift": 10,
         "bands": [
-            {"index": 0, "k_scale": 1.24, "offset": 0.75, "eta": 0.05},
-            {"index": 1, "k_scale": 1.24, "offset": 0.80, "eta": 0.05},
-            {"index": 2, "k_scale": 1.00, "offset": 0.76, "eta": 0.05},
-            {"index": 3, "k_scale": 1.24, "offset": 0.63, "eta": 0.05},
-            {"index": 4, "k_scale": 1.24, "offset": 0.62, "eta": 0.05},
+            {"index": 0, "eta": 0.05},
+            {"index": 1, "eta": 0.05},
+            {"index": 2, "eta": 0.05},
+            {"index": 3, "eta": 0.05},
+            {"index": 4, "eta": 0.05},
         ],
         "bsfi": {
             "offset_range": 1.5,
@@ -141,6 +148,8 @@ DEFAULTS = {
             "ridge_sigma": 0.1,
         },
         "smooth_sigma": [0.5, 0.5, 0.1],
+        "path_interp_method": "cubic",
+        "path_sample_step": 0.005,
     },
 }
 

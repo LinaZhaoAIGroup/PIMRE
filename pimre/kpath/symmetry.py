@@ -60,16 +60,22 @@ def lattice_to_reciprocal(a, b, c, alpha_deg, beta_deg, gamma_deg):
     return k_K, k_M
 
 
-def dft_KM(kx_dft, ky_dft):
+def dft_KM(kx_dft, ky_dft, rotation_angle=0.0, scale=1.0):
     """Find K and M point indices in DFT k-grid.
 
     The DFT momentum axes kx_dft/ky_dft are Cartesian (X, Y) coordinates;
-    the K and M points are matched component-wise.
+    the K and M points are matched component-wise.  Optional rotation and
+    scale calibrate the DFT-side HSP positions (used by the interactive
+    DFT calibration); rotation is applied around the Gamma point.
 
     Parameters
     ----------
     kx_dft, ky_dft : 1D array
         DFT momentum axes.
+    rotation_angle : float
+        Rotation angle in degrees applied to the K/M directions.
+    scale : float
+        Multiplicative scale applied to the |Γ-K| and |Γ-M| distances.
 
     Returns
     -------
@@ -79,6 +85,14 @@ def dft_KM(kx_dft, ky_dft):
     reciprocal_to_cartesian = np.array([[1, 0.5], [0, np.sqrt(3) / 2]])
     MP = reciprocal_to_cartesian.dot(np.array([[0], [0.5]])).T
     KP = reciprocal_to_cartesian.dot(np.array([[1 / 3], [1 / 3]])).T
+
+    if rotation_angle or scale != 1.0:
+        gx = kx_dft[np.argmin(np.abs(kx_dft))]
+        gy = ky_dft[np.argmin(np.abs(ky_dft))]
+        th = np.deg2rad(rotation_angle)
+        R = np.array([[np.cos(th), -np.sin(th)], [np.sin(th), np.cos(th)]])
+        for pt in (KP, MP):
+            pt[:] = gx + scale * (R @ (pt - np.array([[gx, gy]])).T).T
 
     KP_x = np.argmin(np.abs(kx_dft - KP[0, 0]))
     KP_y = np.argmin(np.abs(ky_dft - KP[0, 1]))
@@ -173,6 +187,70 @@ def Get_G_M_K(crystal_data, kx, ky):
     ]
 
     return G, K_points, M_points
+
+
+def select_hsps_by_coverage(hsps, intensity, kx, ky, n_layers=5, radius=3):
+    """Pick the K/M pair that actually has data coverage.
+
+    The 6 K points and 6 M points of the hexagonal BZ are not all inside
+    the measured momentum window (e.g. a quadrant symmetrized map only
+    covers the kx=0 / ky=0 directions).  This helper scores every pair
+    (K_i, M_i) — the orientation-compatible pair in which M lies 30 deg
+    counter-clockwise from K, matching the DFT-side K/M construction used
+    by the affine transform — by the fraction of nonzero pixels in their
+    neighborhood, and returns the best covered pair.
+
+    Parameters
+    ----------
+    hsps : dict
+        HSP dict with keys G, K0..K5, M0..M5 (grid indices).
+    intensity : 3D array
+        Intensity volume (E, kx, ky).
+    kx, ky : 1D array
+        Momentum axes.
+    n_layers : int
+        Number of evenly spaced energy layers used for scoring.
+    radius : int
+        Neighborhood half-width (pixels) around each HSP.
+
+    Returns
+    -------
+    result : dict
+        Keys: K_index, M_index, coverage (fraction 0-1), scores dict.
+    """
+    nE = intensity.shape[0]
+    layers = np.linspace(0, nE - 1, min(n_layers, nE)).astype(int)
+
+    def _coverage(idx):
+        i, j = idx
+        i0, i1 = max(0, i - radius), min(len(kx), i + radius + 1)
+        j0, j1 = max(0, j - radius), min(len(ky), j + radius + 1)
+        full = (2 * radius + 1) ** 2
+        fracs = []
+        for layer in layers:
+            w = intensity[layer, i0:i1, j0:j1]
+            # Fraction relative to the FULL window: candidates pushed onto
+            # the array edge by the 1D-axis approximation score lower.
+            fracs.append(float(np.sum(w > 0)) / full)
+        return float(np.mean(fracs))
+
+    best = None
+    for k in range(6):
+        score = _coverage(hsps[f"K{k}"]) + _coverage(hsps[f"M{k}"])
+        if best is None or score > best[0]:
+            best = (score, k)
+
+    _, k_idx = best
+    return {
+        "K_index": k_idx,
+        "M_index": k_idx,
+        "coverage": float(best[0] / 2),
+        "scores": {
+            f"K{k}": _coverage(hsps[f"K{k}"]) for k in range(6)
+        } | {
+            f"M{m}": _coverage(hsps[f"M{m}"]) for m in range(6)
+        },
+    }
 
 
 def _build_hsps_dict(G, K_points, M_points):

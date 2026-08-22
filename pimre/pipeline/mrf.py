@@ -17,13 +17,18 @@ import numpy as np
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from scipy.interpolate import interp1d
 from scipy.signal import savgol_filter
 
 from pimre.config import crystallographic_data, load_config
 from pimre.dft.reader import load_band_map_h5
 from pimre.kpath.path import bandpath_map as bpm
 from pimre.kpath.path import points2path
-from pimre.kpath.symmetry import dft_KM, find_hsps_robust
+from pimre.kpath.symmetry import (
+    dft_KM,
+    find_hsps_robust,
+    select_hsps_by_coverage,
+)
 from pimre.mrf.evaluation import (
     compute_affine_transform,
     compute_bsfi_2d,
@@ -100,36 +105,95 @@ def _smooth_path_segments(y, max_window=31):
     return out
 
 
-def draw_path(recon_bcsm, I_t_data, E_arr, choose, savepath, G, M, M1, K, K1):
-    """Draw and save a band path plot (M-G, K-G, or G-M-K-G)."""
+def _segment_npoints(a, b, kx_axis, ky_axis, step):
+    """Number of path samples for a segment, from its real momentum length.
+
+    The pixel count of a segment depends on the axis resolution (the few
+    ky rows of the direct method compress the K-G segment), so the sample
+    density is instead chosen per unit momentum distance.
+
+    Parameters
+    ----------
+    a, b : tuple (ix, iy)
+        Endpoint grid indices.
+    kx_axis, ky_axis : 1D array
+        Momentum axes.
+    step : float
+        Momentum length per sample (1/Angstrom).
+
+    Returns
+    -------
+    n : int
+        Number of samples along the segment (>= 2).
+    """
+    mom = float(np.hypot(kx_axis[b[0]] - kx_axis[a[0]],
+                         ky_axis[b[1]] - ky_axis[a[1]]))
+    return max(2, int(np.ceil(mom / step)))
+
+
+def draw_path(recon_bcsm, I_t_data, E_arr, choose, savepath, G, M, M1, K, K1,
+              kx_axis=None, ky_axis=None, interp_method="linear",
+              sample_step=0.005):
+    """Draw and save a band path plot (M-G, K-G, or G-M-K-G).
+
+    The horizontal axis is the accumulated momentum distance along the
+    path (real-space Gamma-M / M-K / K-G lengths), not the pixel count,
+    so that paths dominated by a low-resolution axis (e.g. the few ky
+    rows of the direct method) are not visually compressed.  The path is
+    sampled by real momentum length (``sample_step`` Angstrom per
+    sample) and extracted with ``interp_method`` interpolation.
+    """
+    def _seg(a, b):
+        if kx_axis is not None and ky_axis is not None:
+            return _segment_npoints(a, b, kx_axis, ky_axis, sample_step)
+        return max(2, int(math.sqrt((a[0]-b[0])**2 + (a[1]-b[1])**2)))
+
     if choose == "M":
         path_pts = np.asarray([M, G, M1])
-        n1 = int(math.sqrt((M[0]-G[0])**2 + (M[1]-G[1])**2))
-        segs = [n1, n1]
+        segs = [_seg(M, G), _seg(G, M1)]
     elif choose == "K":
         path_pts = np.asarray([K, G, K1])
-        n1 = int(math.sqrt((K[0]-G[0])**2 + (K[1]-G[1])**2))
-        segs = [n1, n1]
+        segs = [_seg(K, G), _seg(G, K1)]
     else:
         path_pts = np.asarray([G, M, K, G])
-        nGM = int(math.sqrt((M[0]-G[0])**2 + (M[1]-G[1])**2))
-        nMK = int(math.sqrt((M[0]-K[0])**2 + (M[1]-K[1])**2))
-        nKG = int(math.sqrt((K[0]-G[0])**2 + (K[1]-G[1])**2))
-        segs = [nGM, nMK, nKG]
+        segs = [_seg(G, M), _seg(M, K), _seg(K, G)]
 
     row_inds, col_inds, path_inds = points2path(path_pts[:, 0], path_pts[:, 1], npoints=segs)
-    pathD = bpm(np.transpose(I_t_data, (1, 2, 0)), pathr=row_inds, pathc=col_inds, eaxis=2)
-    prec = bpm(np.moveaxis(recon_bcsm, 0, 2), pathr=row_inds, pathc=col_inds, eaxis=2)
+    pathD = bpm(np.transpose(I_t_data, (1, 2, 0)), pathr=row_inds, pathc=col_inds,
+                eaxis=2, interp_method=interp_method)
+    prec = bpm(np.moveaxis(recon_bcsm, 0, 2), pathr=row_inds, pathc=col_inds,
+               eaxis=2, interp_method=interp_method)
+
+    # Real momentum coordinate along the path (accumulated distance).
+    if kx_axis is not None and ky_axis is not None:
+        row1d = np.ravel(row_inds)
+        col1d = np.ravel(col_inds)
+        kx_pts = np.interp(row1d, np.arange(kx_axis.size), kx_axis)
+        ky_pts = np.interp(col1d, np.arange(ky_axis.size), ky_axis)
+        steps = np.sqrt(np.diff(kx_pts) ** 2 + np.diff(ky_pts) ** 2)
+        path_mom = np.concatenate(([0.0], np.cumsum(steps)))
+        x_new = np.linspace(0.0, path_mom[-1], path_mom.size)
+        # Resample intensity and reconstruction onto the uniform momentum axis.
+        fD = interp1d(path_mom, pathD.T, axis=0, bounds_error=False, fill_value=0.0)
+        pathD = fD(x_new).T
+        fP = interp1d(path_mom, prec, axis=1, bounds_error=False, fill_value=np.nan)
+        prec = fP(x_new)
+        x_total = path_mom[-1]
+        x_ticks = path_mom[np.clip(path_inds, 0, path_mom.size - 1)]
+    else:
+        x_new = np.arange(pathD.shape[1])
+        x_total = x_new[-1]
+        x_ticks = path_inds
 
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.imshow(pathD, cmap="plasma", extent=[0, len(row_inds), E_arr[0], E_arr[-1]],
+    ax.imshow(pathD, cmap="plasma", extent=[0, x_total, E_arr[0], E_arr[-1]],
               aspect="auto", origin="lower")
     n_bands = min(prec.shape[0], len(BAND_COLORS))
     for ib in range(n_bands):
-        ax.plot(_smooth_path_segments(prec[ib, :]),
+        ax.plot(x_new, _smooth_path_segments(prec[ib, :]),
                 zorder=1, lw=2.3, color=BAND_COLORS[ib])
-    ax.set(xlim=(0, len(row_inds)), ylim=(E_arr[0], E_arr[-1]))
-    ax.set_xticks(path_inds)
+    ax.set(xlim=(0, x_total), ylim=(E_arr[0], E_arr[-1]))
+    ax.set_xticks(x_ticks)
     labels = {
         "M": [r"$\overline{\mathrm{M}}$", r"$\overline{\Gamma}$", r"$\overline{\mathrm{M}}$"],
         "K": [r"$\overline{\mathrm{K}}$", r"$\overline{\Gamma}$", r"$\overline{\mathrm{K}}$"],
@@ -186,6 +250,8 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
     W_PATH_RIDGE = bsfi_cfg["weights"].get("path_ridge", 0.8)
     RIDGE_SIGMA = bsfi_cfg.get("ridge_sigma", 0.1)
     MAX_SHIFT = mrf_cfg.get("max_shift", 10)
+    PATH_INTERP_METHOD = mrf_cfg.get("path_interp_method", "cubic")
+    PATH_SAMPLE_STEP = mrf_cfg.get("path_sample_step", 0.005)
     smooth_sigma = mrf_cfg["smooth_sigma"]
 
     if exp_data is None:
@@ -229,12 +295,37 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
     result = find_hsps_robust(I_t, kx, ky, crystal, E, calibration=calib)
     hsps = result.hsps
     G = hsps["G"]
-    M = hsps["M0"]
-    M1 = hsps["M3"]
-    K = hsps["K0"]
-    K1 = hsps["K3"]
-    KP_dft_raw, MP_dft_raw = dft_KM(kx_dft, ky_dft)
-    print(f"  HSPs: G={G}, M={M}, K={K} (source={result.source})")
+
+    # Pick the K/M pair that actually has data coverage (the default K0/M0
+    # directions may fall outside the measured window, e.g. for quadrant
+    # symmetrized maps).  Only orientation-compatible (K_i, M_i) pairs are
+    # considered so that Gamma-M-K-Gamma is a closed right triangle along
+    # the BZ edge, matching the DFT-side construction.
+    sel = select_hsps_by_coverage(hsps, I_t, kx, ky)
+    k_sel, m_sel = sel["K_index"], sel["M_index"]
+    M = hsps[f"M{m_sel}"]
+    M1 = hsps[f"M{(m_sel + 3) % 6}"]
+    K = hsps[f"K{k_sel}"]
+    K1 = hsps[f"K{(k_sel + 3) % 6}"]
+
+    # DFT-side HSPs use their own independent calibration (dft_hsps),
+    # applied as rotation/scale around the DFT Gamma point.
+    dft_calib = cfg["calibration"].get("dft_hsps", {})
+    if dft_calib.get("manual", False):
+        KP_dft_raw, MP_dft_raw = dft_KM(
+            kx_dft, ky_dft,
+            rotation_angle=dft_calib.get("rotation_angle", 0.0),
+            scale=dft_calib.get("scale", 1.0))
+        print(f"  DFT HSPs calibrated: θ={dft_calib.get('rotation_angle', 0.0):.2f}°,"
+              f" scale={dft_calib.get('scale', 1.0):.3f}")
+    else:
+        KP_dft_raw, MP_dft_raw = dft_KM(kx_dft, ky_dft)
+    k_ang = (30 + k_sel * 60) % 360
+    m_ang = (60 + m_sel * 60) % 360
+    print(f"  HSPs: G={G}, K{k_ang}°={K}, M{m_ang}°={M} "
+          f"(source={result.source}, coverage={sel['coverage']:.2f})")
+    print("  K/M coverage scores: "
+          + ", ".join(f"{k}={v:.2f}" for k, v in sel["scores"].items()))
 
     T, T_inv, scale, rotation_deg = compute_affine_transform(
         kx, ky, G, K, M, kx_dft, ky_dft, KP_dft_raw, MP_dft_raw)
@@ -279,23 +370,31 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
     print(f"  BSFI weights: corr={W_CORR}, intensity={W_INT}, snr={W_SNR}, "
           f"ridge={W_RIDGE}, path_ridge={W_PATH_RIDGE}")
 
+    # Downsampling stride for the 2D BSFI evaluation; adapt to short
+    # momentum axes (e.g. the 36-pixel ky axis of the direct method).
+    bsfi_stride = max(1, min(4, I_t.shape[2] // 16))
+
     def _bsfi(E0):
         return compute_bsfi_2d(E0, I_t, E, w_corr=W_CORR, w_int=W_INT,
                                w_snr=W_SNR, w_ridge=W_RIDGE,
-                               ridge_sigma=RIDGE_SIGMA)
+                               ridge_sigma=RIDGE_SIGMA, stride=bsfi_stride)
 
-    # Band-path map along G-M-K-G for path-based ridge evaluation
-    nGM = int(math.sqrt((M[0]-G[0])**2 + (M[1]-G[1])**2))
-    nMK = int(math.sqrt((M[0]-K[0])**2 + (M[1]-K[1])**2))
-    nKG = int(math.sqrt((K[0]-G[0])**2 + (K[1]-G[1])**2))
+    # Band-path map along G-M-K-G for path-based ridge evaluation.
+    # Sampled by real momentum length and interpolated like the output
+    # path plots so the ridge score uses the same representation.
     path_pts = np.asarray([G, M, K, G])
-    row_inds, col_inds, path_inds = points2path(path_pts[:, 0], path_pts[:, 1],
-                                                npoints=[nGM, nMK, nKG])
-    pathD = bpm(np.moveaxis(I_t, 0, 2), pathr=row_inds, pathc=col_inds, eaxis=2)
+    row_inds, col_inds, path_inds = points2path(
+        path_pts[:, 0], path_pts[:, 1],
+        npoints=[_segment_npoints(G, M, kx, ky, PATH_SAMPLE_STEP),
+                 _segment_npoints(M, K, kx, ky, PATH_SAMPLE_STEP),
+                 _segment_npoints(K, G, kx, ky, PATH_SAMPLE_STEP)])
+    pathD = bpm(np.moveaxis(I_t, 0, 2), pathr=row_inds, pathc=col_inds,
+                eaxis=2, interp_method=PATH_INTERP_METHOD)
 
     def _path_ridge(E0):
         prec = bpm(np.moveaxis(E0[np.newaxis], 0, 2), pathr=row_inds,
-                   pathc=col_inds, eaxis=2)[0]
+                   pathc=col_inds, eaxis=2,
+                   interp_method=PATH_INTERP_METHOD)[0]
         return path_ridge_score(pathD, prec, E, sigma=RIDGE_SIGMA)
 
     def _offset_score(E0):
@@ -392,9 +491,15 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
     print("\n" + "=" * 60)
     print("STEP 5: Path plots")
     print("=" * 60)
-    draw_path(recon[:], I_t, E, "K", os.path.join(output_dir, "path_KG.png"), G, M, M1, K, K1)
-    draw_path(recon[:], I_t, E, "M", os.path.join(output_dir, "path_MG.png"), G, M, M1, K, K1)
-    draw_path(recon[:], I_t, E, "MK", os.path.join(output_dir, "path_GMKG.png"), G, M, M1, K, K1)
+    draw_path(recon[:], I_t, E, "K", os.path.join(output_dir, "path_KG.png"), G, M, M1, K, K1,
+              kx_axis=mrf.kx, ky_axis=mrf.ky,
+              interp_method=PATH_INTERP_METHOD, sample_step=PATH_SAMPLE_STEP)
+    draw_path(recon[:], I_t, E, "M", os.path.join(output_dir, "path_MG.png"), G, M, M1, K, K1,
+              kx_axis=mrf.kx, ky_axis=mrf.ky,
+              interp_method=PATH_INTERP_METHOD, sample_step=PATH_SAMPLE_STEP)
+    draw_path(recon[:], I_t, E, "MK", os.path.join(output_dir, "path_GMKG.png"), G, M, M1, K, K1,
+              kx_axis=mrf.kx, ky_axis=mrf.ky,
+              interp_method=PATH_INTERP_METHOD, sample_step=PATH_SAMPLE_STEP)
     print("  Saved path plots")
 
     # ── Save results ──

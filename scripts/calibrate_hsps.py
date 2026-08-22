@@ -307,8 +307,12 @@ class CalibrateHspsWindow(QtWidgets.QMainWindow):
 
         layout.addWidget(ctrl)
 
+    def _hsps_key(self):
+        """Config key holding the HSP calibration for the current mode."""
+        return "dft_hsps" if self.mode == "dft" else "hsps"
+
     def _load_calibration(self):
-        hsps_cfg = self.cfg["calibration"].get("hsps", {})
+        hsps_cfg = self.cfg["calibration"].get(self._hsps_key(), {})
         if hsps_cfg.get("manual", False):
             self.rot_slider.setValue(int(hsps_cfg.get("rotation_angle", 0.0) * 10))
             self.scale_slider.setValue(int(hsps_cfg.get("scale", 1.0) * 100))
@@ -368,7 +372,8 @@ class CalibrateHspsWindow(QtWidgets.QMainWindow):
         self._update_view()
 
     def _save(self):
-        self.cfg["calibration"]["hsps"] = {
+        key = self._hsps_key()
+        self.cfg["calibration"][key] = {
             "manual": True,
             "rotation_angle": self.rot_slider.value() / 10.0,
             "scale": self.scale_slider.value() / 100.0,
@@ -377,6 +382,7 @@ class CalibrateHspsWindow(QtWidgets.QMainWindow):
         QtWidgets.QMessageBox.information(
             self, "Saved",
             f"Calibration saved to {self.config_path}\n\n"
+            f"Mode: {self.mode} (config key: calibration.{key})\n"
             f"Rotation: {self.rot_slider.value() / 10:.1f}°\n"
             f"Scale: {self.scale_slider.value() / 100:.2f}")
 

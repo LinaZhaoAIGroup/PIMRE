@@ -139,14 +139,44 @@ def RotateCoordinates(KX, KY, theta=60, KX_Shift=0, KY_Shift=0):
 # --- Quadrant symmetrization ---
 
 
+def _flip_join(arr, flip, include_axis):
+    """Mirror a 2D array across its leading axis and join the halves.
+
+    Parameters
+    ----------
+    arr : 2D array
+        Upper/right half including the symmetry axis (first row/column
+        lies on kx=0 or ky=0 if include_axis is True).
+    flip : bool
+        Whether to mirror at all.
+    include_axis : bool
+        True if the first row/column of arr is the symmetry axis (it is
+        shared by both halves and must not be duplicated).
+
+    Returns
+    -------
+    joined : 2D array
+        Full array symmetric about the axis.
+    """
+    if not flip:
+        return arr
+    if include_axis:
+        return np.concatenate((arr[1:][::-1], arr), axis=0)
+    return np.concatenate((arr[::-1], arr), axis=0)
+
+
 def quadrant_symmetrize(bands, KX, KY, flip_kx=True, flip_ky=True,
-                        kx_grid=None, ky_grid=None):
+                        kx_grid=None, ky_grid=None, interp_method="cubic",
+                        smooth_radius=0.02, fill_radius=0.03):
     """Reconstruct the full Brillouin zone from its 1/4 (kx>=0, ky>=0) crop.
 
-    Scattered momentum points (KX, KY) with Gamma at the origin are cropped
-    to the first quadrant, mirrored across the kx=0 / ky=0 axes (flip_kx /
-    flip_ky, both on by default) and binned onto the regular output grid.
-    Copies landing in the same bin are averaged.
+    The scattered momentum points (KX, KY) with Gamma at the origin are
+    cropped to the first quadrant, interpolated onto a regular grid covering
+    only that quadrant (1/4 of the interpolation work of the full-plane
+    KD-tree path), and the full BZ is then obtained by pure array
+    mirror/flip operations (flip_kx / flip_ky, both on by default). The
+    symmetry axis is shared between the mirrored halves, so the result is
+    exactly symmetric.
 
     Parameters
     ----------
@@ -159,7 +189,23 @@ def quadrant_symmetrize(bands, KX, KY, flip_kx=True, flip_ky=True,
     flip_ky : bool
         Mirror across the kx=0 axis (expand into ky<0).
     kx_grid, ky_grid : 2D array or None
-        Target regular grid; if None, inferred from the mirrored points.
+        Target regular grid of the full BZ; if None, inferred from the
+        mirrored points.
+    interp_method : str
+        Griddata interpolation method ('cubic' or 'linear').
+    smooth_radius : float
+        Radius (1/Angstrom) of a light neighborhood average applied to the
+        scattered 1/4-BZ pixels before interpolation, to reduce shot noise
+        while keeping most band details (0 or None disables smoothing).
+        For reference the KD-tree path uses radius=0.05 which visibly
+        smooths away fine band structure.
+    fill_radius : float
+        Maximum distance (1/Angstrom) from the scattered pixels at which
+        interpolation holes (Gamma corner, hull boundary) are filled with
+        the nearest pixel value.  Farther holes stay zero so that
+        genuinely uncovered regions (e.g. K points outside the measured
+        window) remain distinguishable from measured data.  None fills
+        every hole.
 
     Returns
     -------
@@ -170,38 +216,61 @@ def quadrant_symmetrize(bands, KX, KY, flip_kx=True, flip_ky=True,
     pts = np.column_stack((KX[mask], KY[mask]))
     vals = bands[mask]
 
-    kx, ky, v = pts[:, 0], pts[:, 1], vals
-    if flip_kx:
-        kx = np.concatenate((kx, -kx))
-        ky = np.concatenate((ky, ky))
-        v = np.concatenate((v, v))
-    if flip_ky:
-        kx = np.concatenate((kx, kx))
-        ky = np.concatenate((ky, -ky))
-        v = np.concatenate((v, v))
+    if smooth_radius:
+        tree = cKDTree(pts)
+        neighbors = tree.query_ball_point(pts, r=float(smooth_radius),
+                                          return_sorted=False)
+        vals = np.array([vals[i].mean() for i in neighbors])
 
     if kx_grid is None or ky_grid is None:
-        n = int(np.ceil(np.max(np.abs(kx))))
+        n = int(np.ceil(np.max(np.abs(pts[:, 0]))))
         kx_out = np.linspace(-n, n, 2 * n + 1)
         ky_out = np.linspace(-n, n, 2 * n + 1)
     else:
         kx_out = kx_grid[:, 0] if kx_grid.ndim == 2 else kx_grid
         ky_out = ky_grid[0, :] if ky_grid.ndim == 2 else ky_grid
 
-    nx, ny = kx_out.shape[0], ky_out.shape[0]
-    kx_edges = (kx_out[:-1] + kx_out[1:]) / 2
-    ky_edges = (ky_out[:-1] + ky_out[1:]) / 2
-    ix = np.clip(np.digitize(kx, kx_edges), 0, nx - 1)
-    iy = np.clip(np.digitize(ky, ky_edges), 0, ny - 1)
+    # 1/4-BZ grid: right-upper half of the full grid (kx>=0, ky>=0).
+    ix0 = int(np.searchsorted(kx_out, 0.0))
+    iy0 = int(np.searchsorted(ky_out, 0.0))
+    kx_h = kx_out[ix0:]
+    ky_h = ky_out[iy0:]
+    kx_axis = bool(np.isclose(kx_h[0], 0.0))
+    ky_axis = bool(np.isclose(ky_h[0], 0.0))
 
-    sums = np.zeros((nx, ny))
-    counts = np.zeros((nx, ny))
-    np.add.at(sums, (ix, iy), v)
-    np.add.at(counts, (ix, iy), 1)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        E_Mon = np.divide(sums, counts)
-    E_Mon = np.nan_to_num(E_Mon, nan=0.0)
-    return E_Mon
+    # Interpolate the scattered 1/4-BZ pixels onto the 1/4 regular grid.
+    half = griddata(pts, vals, (kx_h[:, None], ky_h[None, :]),
+                    method=interp_method)
+    if np.isnan(half).any():
+        # Fill interpolation holes (Gamma corner, hull boundary) with the
+        # nearest pixel value, but only close to the measured pixels so
+        # genuinely uncovered regions stay zero.
+        half_nearest = griddata(pts, vals, (kx_h[:, None], ky_h[None, :]),
+                                method="nearest")
+        if fill_radius:
+            tree = cKDTree(pts)
+            pts_grid = np.column_stack(
+                (kx_h[:, None].repeat(ky_h.size), np.tile(ky_h, kx_h.size)))
+            dist, _ = tree.query(pts_grid)
+            dist = dist.reshape(half.shape)
+            half_nearest = np.where(dist <= fill_radius, half_nearest, 0.0)
+        half = np.where(np.isnan(half), half_nearest, half)
+    half = np.nan_to_num(half, nan=0.0)
+
+    # Pure array mirror operations to the full BZ.
+    full = _flip_join(half, flip_kx, kx_axis)
+    full = _flip_join(full.T, flip_ky, ky_axis).T
+
+    # Align to the full-grid shape when a flip is disabled (the empty
+    # half/quadrant stays zero-filled).
+    nx, ny = kx_out.shape[0], ky_out.shape[0]
+    if full.shape != (nx, ny):
+        padded = np.zeros((nx, ny))
+        kx0 = 0 if flip_kx else ix0
+        ky0 = 0 if flip_ky else iy0
+        padded[kx0:kx0 + full.shape[0], ky0:ky0 + full.shape[1]] = full
+        full = padded
+    return full
 
 
 # --- Multi-layer expansion ---

@@ -487,7 +487,7 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         header = QtWidgets.QWidget()
         hl = QtWidgets.QHBoxLayout(header); hl.setContentsMargins(0, 2, 0, 2)
         hl.addWidget(QtWidgets.QLabel(""))
-        for c in ["DFT idx", "k_scale", "offset (eV)", "eta"]:
+        for c in ["DFT idx", "eta"]:
             hl.addWidget(QtWidgets.QLabel(f"<b>{c}</b>"))
         hl.addStretch()
         self._band_layout.addWidget(header)
@@ -546,6 +546,15 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         row.addWidget(w1); row.addWidget(w2); row.addWidget(w3); row.addStretch()
         lay.addLayout(row)
 
+        row2 = QtWidgets.QHBoxLayout()
+        self._cb_path_interp = QtWidgets.QComboBox()
+        self._cb_path_interp.addItems(["cubic", "linear", "nearest"])
+        w4 = QtWidgets.QLabel("Path interp:")
+        w5, self._e_path_step = _labeled_edit("Path sample (Å⁻¹/px):", width=100)
+        row2.addWidget(w4); row2.addWidget(self._cb_path_interp)
+        row2.addWidget(w5); row2.addStretch()
+        lay.addLayout(row2)
+
         lay.addStretch()
 
     # ── Output tab ─────────────────────────────────────────────────
@@ -577,11 +586,14 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         row3 = QtWidgets.QHBoxLayout()
         row3.addWidget(QtWidgets.QLabel("Method:"))
         self._cb_method = QtWidgets.QComboBox()
-        self._cb_method.addItems(["kdtree", "quadrant"])
+        self._cb_method.addItems(["kdtree", "quadrant", "direct"])
         row3.addWidget(self._cb_method)
         w_fx, self._cb_flip_kx = _labeled_check("Flip kx", True)
         w_fy, self._cb_flip_ky = _labeled_check("Flip ky", True)
-        row3.addWidget(w_fx); row3.addWidget(w_fy); row3.addStretch()
+        row3.addWidget(w_fx); row3.addWidget(w_fy)
+        w_sr, self._e_smooth_radius = _labeled_edit("Quad smooth radius:", width=80)
+        row3.addWidget(w_sr)
+        row3.addStretch()
         g.addLayout(row3)
         lay.addWidget(g)
 
@@ -600,7 +612,7 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         row_lay = QtWidgets.QHBoxLayout(w); row_lay.setContentsMargins(0, 2, 0, 2)
         row_lay.addWidget(QtWidgets.QLabel(f"Band {ib}"))
         row = {}
-        for key in ["index", "k_scale", "offset", "eta"]:
+        for key in ["index", "eta"]:
             e = QtWidgets.QLineEdit(); e.setFixedWidth(80)
             row_lay.addWidget(e)
             row[key] = e
@@ -671,8 +683,6 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         for ib, row in enumerate(self._band_rows):
             bands.append({
                 "index": int(row["index"].text() or ib),
-                "k_scale": float(row["k_scale"].text() or 1.0),
-                "offset": float(row["offset"].text() or 0.0),
                 "eta": float(row["eta"].text() or 1e-6),
             })
         self.cfg["mrf"]["bands"] = bands
@@ -695,6 +705,8 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         self.cfg["mrf"]["offset_mode"] = "shared"
         if self._e_max_shift.text():
             self.cfg["mrf"]["max_shift"] = int(self._e_max_shift.text())
+        self.cfg["mrf"]["path_interp_method"] = self._cb_path_interp.currentText()
+        self.cfg["mrf"]["path_sample_step"] = float(self._e_path_step.text() or 0.005)
 
         pp = self.cfg["preprocessing"]
         pp["output_path"] = self._e_out_path.text()
@@ -709,6 +721,7 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         pp.setdefault("quadrant", {})
         pp["quadrant"]["flip_kx"] = self._cb_flip_kx.isChecked()
         pp["quadrant"]["flip_ky"] = self._cb_flip_ky.isChecked()
+        pp["quadrant"]["smooth_radius"] = float(self._e_smooth_radius.text() or 0.02)
 
     def _load_to_ui(self):
         self._e_name.setText(self.cfg["sample"]["name"])
@@ -747,8 +760,6 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         for ib, band in enumerate(self.cfg["mrf"]["bands"]):
             if ib < len(self._band_rows):
                 self._band_rows[ib]["index"].setText(str(band["index"]))
-                self._band_rows[ib]["k_scale"].setText(str(band["k_scale"]))
-                self._band_rows[ib]["offset"].setText(str(band["offset"]))
                 self._band_rows[ib]["eta"].setText(str(band["eta"]))
 
         bsfi = self.cfg["mrf"]["bsfi"]
@@ -765,12 +776,15 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         self._e_smooth.setText(", ".join(str(x) for x in self.cfg["mrf"]["smooth_sigma"]))
         self._e_offset_mode.setText(self.cfg["mrf"].get("offset_mode", "shared"))
         self._e_max_shift.setText(str(self.cfg["mrf"].get("max_shift", 10)))
+        method = self.cfg["mrf"].get("path_interp_method", "cubic")
+        self._cb_path_interp.setCurrentText(method if method in ("cubic", "linear", "nearest") else "cubic")
+        self._e_path_step.setText(str(self.cfg["mrf"].get("path_sample_step", 0.005)))
 
         pp = self.cfg["preprocessing"]
         self._e_out_path.setText(pp["output_path"])
         self._e_out_grid.setText(str(pp["output_grid"]))
         method = pp.get("method", "kdtree")
-        self._cb_method.setCurrentText(method if method in ("kdtree", "quadrant") else "kdtree")
+        self._cb_method.setCurrentText(method if method in ("kdtree", "quadrant", "direct") else "kdtree")
         self._e_kd_radius.setText(str(pp["kd_radius"]))
         self._e_stride.setText(str(pp["stride"]))
         self._e_nrot.setText(str(pp["n_rotations"]))
@@ -780,6 +794,7 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         q = pp.get("quadrant", {})
         self._cb_flip_kx.setChecked(q.get("flip_kx", True))
         self._cb_flip_ky.setChecked(q.get("flip_ky", True))
+        self._e_smooth_radius.setText(str(q.get("smooth_radius", 0.02)))
 
     # ── actions ─────────────────────────────────────────────────────
 

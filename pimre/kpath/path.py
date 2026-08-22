@@ -4,6 +4,7 @@ Extracted from mpes.analysis, ArpesBandRecons.CoordTrans, and 4.mrf.ipynb.
 """
 
 import numpy as np
+from scipy import ndimage
 from scipy.interpolate import RegularGridInterpolator
 
 
@@ -37,31 +38,50 @@ def line_generator(A, B, npoints, endpoint=True, ret="separated"):
         return point_coords
 
 
-def image_interpolator(image, iptype="RGI"):
+def image_interpolator(image, iptype="RGI", interp_method="linear"):
     """Construct an image interpolator."""
     dims = image.shape
     dimaxes = [list(range(d)) for d in dims]
     if iptype == "RGI":
-        return RegularGridInterpolator(dimaxes, image)
+        return RegularGridInterpolator(dimaxes, image, method=interp_method)
     raise NotImplementedError
 
 
-def interp_slice(data, pathr=None, pathc=None, path_coords=None, iptype="RGI"):
-    """Slice 2D/3D data through interpolation."""
-    ndim = data.ndim
-    interp = image_interpolator(data, iptype=iptype)
+def interp_slice(data, pathr=None, pathc=None, path_coords=None, iptype="RGI",
+                 interp_method="linear"):
+    """Slice 2D/3D data through interpolation along a pixel path.
+
+    The interpolation is performed per layer with
+    ``scipy.ndimage.map_coordinates`` (spline orders: nearest=0,
+    linear=1, cubic=3) and ``prefilter=False`` (local spline kernel).
+    This matches the linear regular-grid interpolation of the previous
+    implementation, supports 'cubic' even when a dimension has fewer
+    than 4 points (e.g. a single reconstructed band), is much faster
+    than the 3D RGI cubic, and keeps NaN localized instead of letting
+    the spline prefilter spread them over the whole array (which would
+    erase the reconstructed curves where the band leaves the measured
+    energy window).
+    """
+    order = {"nearest": 0, "linear": 1, "cubic": 3}.get(interp_method, 1)
     if path_coords is not None:
-        interp_data = interp(path_coords)
-    else:
-        pathlength = np.asarray(pathr).size
-        if ndim == 2:
-            coords = np.concatenate((pathr, pathc), axis=1)
-        elif ndim == 3:
-            nstack = data.shape[-1]
-            coords = [np.concatenate((pathr, pathc, np.zeros((pathlength, 1)) + i), axis=1) for i in range(nstack)]
-            coords = np.concatenate(coords, axis=0)
-        interp_data = interp(coords)
-    return interp_data
+        pathr = path_coords[:, 0]
+        pathc = path_coords[:, 1]
+    pathr = np.ravel(pathr)
+    pathc = np.ravel(pathc)
+
+    if data.ndim == 2:
+        return ndimage.map_coordinates(data, [pathr, pathc], order=order,
+                                       mode="nearest", prefilter=False)
+    if data.ndim == 3:
+        nstack = data.shape[-1]
+        parts = [
+            ndimage.map_coordinates(data[..., i], [pathr, pathc],
+                                    order=order, mode="nearest",
+                                    prefilter=False)
+            for i in range(nstack)
+        ]
+        return np.concatenate(parts)
+    raise ValueError(f"interp_slice supports 2D/3D data, got ndim={data.ndim}")
 
 
 def points2path(pointsr, pointsc, method="analog", npoints=None, ret="separated"):
@@ -117,7 +137,8 @@ def points2path(pointsr, pointsc, method="analog", npoints=None, ret="separated"
         return polyr, polyc, pid
 
 
-def bandpath_map(bsvol, pathr=None, pathc=None, path_coords=None, eaxis=2, method="analog"):
+def bandpath_map(bsvol, pathr=None, pathc=None, path_coords=None, eaxis=2,
+                 method="analog", interp_method="linear"):
     """Extract band diagram map from 2D/3D data.
 
     Parameters
@@ -132,6 +153,9 @@ def bandpath_map(bsvol, pathr=None, pathc=None, path_coords=None, eaxis=2, metho
         Energy axis index.
     method : str
         'analog' or 'digital'.
+    interp_method : str
+        Interpolation order for the analog path ('linear', 'cubic',
+        'nearest'); passed to RegularGridInterpolator.
 
     Returns
     -------
@@ -151,6 +175,7 @@ def bandpath_map(bsvol, pathr=None, pathc=None, path_coords=None, eaxis=2, metho
             pathr, pathc = map(np.ravel, [pathr, pathc])
         bpm = bsvol[pathr, pathc, :]
     elif method == "analog":
-        bpm = interp_slice(bsvol, pathr=pathr, pathc=pathc, path_coords=path_coords)
+        bpm = interp_slice(bsvol, pathr=pathr, pathc=pathc,
+                           path_coords=path_coords, interp_method=interp_method)
         bpm = bpm.reshape((edim, bpm.size // edim))
     return bpm

@@ -36,7 +36,6 @@ def compute_grid(cfg):
     cal = cfg["calibration"]
     pp = cfg["preprocessing"]
     method = pp.get("method", "kdtree")
-
     with h5py.File(ar["path"], "r") as f:
         parts = ar["dataset"].split("/")
         d = f
@@ -91,7 +90,7 @@ def compute_grid(cfg):
         KY_abs[:, :, ymask] *= -1
         KX, KY = KX_abs, KY_abs
 
-    if method == "quadrant":
+    if method in ("quadrant", "direct"):
         bands_rep = bands
         KX_rot = KX
         KY_rot = KY
@@ -109,21 +108,33 @@ def compute_grid(cfg):
             KX_rot[:, :, i * KX.shape[2]:(i + 1) * KX.shape[2]] = kxr
             KY_rot[:, :, i * KY.shape[2]:(i + 1) * KY.shape[2]] = kyr
 
-    if pp.get("auto_grid", False):
-        n_out = np.max(KX_rot.shape)
+    if method == "direct":
+        # Use the momentum-space pixel grid at the reference energy layer
+        # as the output axes (same resolution as the angular grid); each
+        # energy layer keeps its own intensity on these pixels.
+        ref = KX.shape[0] // 2
+        kx_out = KX_rot[ref, :, KX.shape[2] // 2]
+        ky_out = KY_rot[ref, KX.shape[1] // 2, :]
+        kx_out = kx_out - cal["kx_grid_shift"]
+        ky_out = ky_out - cal["ky_grid_shift"]
+        print(f"  Output grid: {kx_out.size}×{ky_out.size} (method=direct, "
+              f"reference layer {ref})")
     else:
-        n_out = min(np.max(KX_rot.shape), pp["output_grid"])
-    if method == "quadrant":
-        kx_max = float(np.max(np.abs(KX)))
-        ky_max = float(np.max(np.abs(KY)))
-        kx_out = np.linspace(-kx_max, kx_max, n_out)
-        ky_out = np.linspace(-ky_max, ky_max, n_out)
-    else:
-        kx_out = np.linspace(np.min(KX_rot), np.max(KX_rot), n_out)
-        ky_out = np.linspace(np.min(KY_rot), np.max(KY_rot), n_out)
-    kx_out = kx_out - cal["kx_grid_shift"]
-    ky_out = ky_out - cal["ky_grid_shift"]
-    print(f"  Output grid: {n_out}×{n_out} (method={method})")
+        if pp.get("auto_grid", False):
+            n_out = np.max(KX_rot.shape)
+        else:
+            n_out = min(np.max(KX_rot.shape), pp["output_grid"])
+        if method == "quadrant":
+            kx_max = float(np.max(np.abs(KX)))
+            ky_max = float(np.max(np.abs(KY)))
+            kx_out = np.linspace(-kx_max, kx_max, n_out)
+            ky_out = np.linspace(-ky_max, ky_max, n_out)
+        else:
+            kx_out = np.linspace(np.min(KX_rot), np.max(KX_rot), n_out)
+            ky_out = np.linspace(np.min(KY_rot), np.max(KY_rot), n_out)
+        kx_out = kx_out - cal["kx_grid_shift"]
+        ky_out = ky_out - cal["ky_grid_shift"]
+        print(f"  Output grid: {n_out}×{n_out} (method={method})")
 
     return E_grid, bands, kx_angle, ky_angle, bands_rep, KX_rot, KY_rot, kx_out, ky_out
 
@@ -155,10 +166,28 @@ def preprocess_full(cfg, E_grid, bands_rep, KX_rot, KY_rot, kx_out, ky_out):
         qcfg = pp.get("quadrant", {})
         flip_kx = bool(qcfg.get("flip_kx", True))
         flip_ky = bool(qcfg.get("flip_ky", True))
+        smooth_radius = qcfg.get("smooth_radius", 0.02)
+        fill_radius = qcfg.get("fill_radius", 0.03)
         print(f"  Quadrant symmetrization on {bands_rep.shape[0]} layers"
-              f" (flip_kx={flip_kx}, flip_ky={flip_ky}, stride={pp['stride']}) ...")
+              f" (flip_kx={flip_kx}, flip_ky={flip_ky},"
+              f" smooth_radius={smooth_radius}, fill_radius={fill_radius},"
+              f" stride={pp['stride']}) ...")
+    elif method == "direct":
+        print(f"  Direct use of momentum-space pixels on {bands_rep.shape[0]} layers"
+              f" (no interpolation/symmetrization)")
     else:
         print(f"  KD-interpolation on {bands_rep.shape[0]} layers (stride={pp['stride']}) ...")
+
+    if method == "direct":
+        # No interpolation or symmetrization: the angular pixel grid with
+        # its momentum axes is used as-is.
+        E_Mon = bands_rep.astype(float)
+        print(f"  E_Mon: {E_Mon.shape}")
+        save_preprocessed_h5(pp["output_path"] or "test/exp_preprocessed.h5",
+                             E_grid, kx_out, ky_out, E_Mon)
+        print(f"  Saved → {pp['output_path'] or 'test/exp_preprocessed.h5'}")
+        return E_Mon
+
     n_out = kx_out.shape[0]
     kxm, kym = np.meshgrid(kx_out, ky_out, indexing="ij")
     E_Mon = np.zeros((bands_rep.shape[0], n_out, n_out))
@@ -170,6 +199,7 @@ def preprocess_full(cfg, E_grid, bands_rep, KX_rot, KY_rot, kx_out, ky_out):
             E_Mon[i] = quadrant_symmetrize(
                 bands_rep[i], KX_rot[i], KY_rot[i],
                 flip_kx=flip_kx, flip_ky=flip_ky,
+                smooth_radius=smooth_radius, fill_radius=fill_radius,
                 kx_grid=kxm, ky_grid=kym)
         else:
             E_Mon[i] = KDInterp(bands_rep[i], KX_rot[i], KY_rot[i],

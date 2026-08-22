@@ -18,10 +18,14 @@ arpes:
   path: /home/dengxw/ARPES/mapping/data/theory/dataCliu.h5
   work_function: 16.03
 calibration:
-  hsps:
+  dft_hsps:
     manual: true
     rotation_angle: 30.0
     scale: 0.79
+  hsps:
+    manual: true
+    rotation_angle: 27.8
+    scale: 0.87
   kx_grid_shift: 0.0
   kx_shift: 0.05150417962962628
   ky_grid_shift: 1.1102230246251565e-16
@@ -29,7 +33,6 @@ calibration:
 dft:
   csv_file: extracted_data.csv
   fermi_file: BAND_GAP
-  drop_top_bands: 33
   k_grid:
   - 20
   - 20
@@ -37,6 +40,7 @@ dft:
   - 101
   - 101
   path: /home/dengxw/ARPES/share_data/RbTiBi/Raw_Data
+  drop_top_bands: 33
 lattice:
   a: 5.8077
   alpha: 90.0
@@ -45,28 +49,16 @@ lattice:
   c: 9.1297
   gamma: 120.0
 mrf:
-  num_epochs: 10
-  max_shift: 10
   bands:
   - index: 0
-    k_scale: 1.24
-    offset: 0.75
     eta: 0.05
   - index: 1
-    k_scale: 1.24
-    offset: 0.8
     eta: 0.05
   - index: 2
-    k_scale: 1.0
-    offset: 0.76
     eta: 0.05
   - index: 3
-    k_scale: 1.24
-    offset: 0.63
     eta: 0.05
   - index: 4
-    k_scale: 1.24
-    offset: 0.62
     eta: 0.05
   bsfi:
     fine_tune_range: 0.05
@@ -79,24 +71,29 @@ mrf:
       path_ridge: 0.8
       ridge: 0.5
       snr: 0.1
+  max_shift: 10
+  num_epochs: 10
+  path_interp_method: cubic
+  path_sample_step: 0.005
   smooth_sigma:
   - 0.5
   - 0.5
   - 0.1
+  offset_mode: shared
 preprocessing:
-  # method: 'kdtree' (KD-tree interpolation, original) or 'quadrant'
-  #         (1/4-BZ crop + mirror symmetrization, default flip on)
-  method: kdtree
   auto_grid: true
   kd_radius: 0.05
-  n_rotations: 6
-  output_grid: 200
-  output_path: test/exp_preprocessed.h5
+  method: kdtree
+  n_rotations: 5
+  output_grid: 700
+  output_path: /home/dengxw/ARPES/PIMRE/test/exp_preprocessed.h5
+  quadrant:
+    fill_radius: 0.03
+    flip_kx: true
+    flip_ky: true
+    smooth_radius: 0.02
   sign_correct: false
   sort_axes: true
   stride: 10
-  quadrant:
-    flip_kx: true
-    flip_ky: true
 sample:
   name: RbTiBi
