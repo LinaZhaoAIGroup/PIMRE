@@ -106,7 +106,13 @@ class MrfRec:
         Einterp = intFunc(np.column_stack((kxx, kyy)))
 
         self.offset = offset
-        self.E0 = np.reshape(Einterp + self.offset, (self.lengthKx, self.lengthKy))
+        E0_vals = Einterp + self.offset
+        nan_mask = np.isnan(E0_vals)
+        if nan_mask.any():
+            print(f"  initializeBand: {int(nan_mask.sum())} point(s) outside DFT "
+                  "coverage (NaN); initializing them at mid-window")
+            E0_vals = np.where(nan_mask, 0.5 * (self.E[0] + self.E[-1]), E0_vals)
+        self.E0 = np.reshape(E0_vals, (self.lengthKx, self.lengthKy))
 
         EE, EE0 = np.meshgrid(self.E, self.E0)
         ind1d = np.argmin(np.abs(EE - EE0), 1)
@@ -233,7 +239,7 @@ class MrfRec:
             for i in range(2):
                 indEb[i][i] = updateW[i].unsqueeze(2)
             if updateLogP:
-                self.logP[2 * epoch + 1] = self._compute_logPTot_pt(logP, logI, indEb).item()
+                self.logP[2 * epoch + 1] = self._compute_logPTot_pt(E1d, logI, indEb).item()
 
             # Black nodes
             logP = self._compute_logP_pt(E1d, E3d, logI, indEb)
@@ -241,7 +247,7 @@ class MrfRec:
             for i in range(2):
                 indEb[i][1 - i] = updateB[i].unsqueeze(2)
             if updateLogP:
-                self.logP[2 * epoch + 2] = self._compute_logPTot_pt(logP, logI, indEb).item()
+                self.logP[2 * epoch + 2] = self._compute_logPTot_pt(E1d, logI, indEb).item()
 
         # Extract results
         for i in range(2):
@@ -354,13 +360,42 @@ class MrfRec:
             updates.append(lp.argmax(dim=2))
         return updates
 
-    def _compute_logPTot_pt(self, logP, logI, indEb):
-        """Compute total logP."""
+    def _compute_logPTot_pt(self, E1d, logI, indEb):
+        """Compute total logP over the checkerboard-covered nodes.
+
+        Intensity terms are summed per node; neighbor penalties are counted
+        once per adjacent node pair (the same convention as getLogP), using
+        the current energies of ``indEb``.  Nodes outside the covered even
+        extent (trailing odd row/column) have no pair partner here and are
+        represented by their intensity term only.
+        """
         total = torch.tensor(0.0)
         for i in range(2):
             for j in range(2):
-                gathered = torch.gather(logP[i][j], 2, indEb[i][j])
-                total = total + gathered.sum()
+                # Intensity of the SELECTED bin only (logI holds the full
+                # energy profile per node).
+                total = total + torch.gather(logI[i][j], 2, indEb[i][j]).sum()
+
+        gE = [[self._gather_energies(E1d, indEb[i][j]) for j in range(2)]
+              for i in range(2)]
+
+        # Vertical (row) pairs: (even 2r, odd 2r+1) and (odd 2r+1, even 2r+2).
+        for j in range(2):
+            E0, E1 = gE[0][j], gE[1][j]
+            n = min(E0.shape[0], E1.shape[0])
+            total = total - ((E0[:n] - E1[:n]) ** 2).sum()
+            n2 = min(E1.shape[0], E0.shape[0] - 1)
+            if n2 > 0:
+                total = total - ((E1[:n2] - E0[1:n2 + 1]) ** 2).sum()
+
+        # Horizontal (column) pairs: (even 2c, odd 2c+1) and (odd 2c+1, even 2c+2).
+        for i in range(2):
+            E0, E1 = gE[i][0], gE[i][1]
+            n = min(E0.shape[1], E1.shape[1])
+            total = total - ((E0[:, :n] - E1[:, :n]) ** 2).sum()
+            n2 = min(E1.shape[1], E0.shape[1] - 1)
+            if n2 > 0:
+                total = total - ((E1[:, :n2] - E0[:, 1:n2 + 1]) ** 2).sum()
         return total
 
     # --- Output ---

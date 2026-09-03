@@ -33,7 +33,7 @@ from PyQt5 import QtCore, QtWidgets
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from pimre.config import load_config, save_config
-from pimre.dft.reader import load_band_map_h5
+from pimre.dft.reader import load_band_map_any
 from pimre.kpath.symmetry import (
     find_hsps_robust,
     lattice_to_reciprocal,
@@ -180,14 +180,9 @@ class CalibrateHspsWindow(QtWidgets.QMainWindow):
 
     def _load_data(self):
         if self.mode == "dft":
-            if self.band_map_path.endswith(".h5"):
-                E_dft, evb, ecb, kx, ky = load_band_map_h5(
-                    self.band_map_path,
-                    drop_top_bands=self.cfg.get("dft", {}).get("drop_top_bands"))
-            else:
-                # Legacy .mat fallback
-                from test.compare_band_map import load_band_map as _load_mat
-                E_dft, evb, ecb, kx, ky = _load_mat(self.band_map_path)
+            E_dft, evb, ecb, kx, ky = load_band_map_any(
+                self.band_map_path,
+                drop_top_bands=self.cfg.get("dft", {}).get("drop_top_bands"))
             self.data = E_dft
             self.n_bands = E_dft.shape[0]
             self.E_grid = None

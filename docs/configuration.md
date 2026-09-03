@@ -77,10 +77,11 @@ documented below.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `path` | str | `""` | Path to DFT raw data directory |
-| `csv_file` | str | `"extracted_data.csv"` | DFT CSV file name |
-| `fermi_file` | str | `"BAND_GAP"` | Fermi energy file name |
+| `csv_file` | str | `"extracted_data.csv"` | DFT CSV file name (resolved against `dft.path`; used when `--dft-csv` is not passed to `run_dft_processing.py`) |
+| `fermi_file` | str | `"BAND_GAP"` | Fermi energy / BAND_GAP file name (resolved against `dft.path`; used when neither `--fermi-file` nor `--band-gap-file` is passed) |
 | `k_grid` | list | `[20, 20]` | DFT k-point grid size |
-| `output_grid` | list | `[101, 101]` | Output interpolation grid size |
+| `output_grid` | list | `[101, 101]` | Output interpolation grid size (used by the `griddata` method) |
+| `drop_top_bands` | int or null | `null` | Number of highest-energy conduction bands to drop from the stacked band structure. The stack is ordered by descending band energy (highest conduction band first, VBM at position `n_conduction - drop_top_bands`), so plain `mrf.bands.index` entries depend on this number matching the DFT band count. Prefer `from_vbm` entries (see `mrf.bands`) |
 
 ## `preprocessing`
 
@@ -89,7 +90,7 @@ documented below.
 | `output_grid` | int | `200` | Output momentum grid size |
 | `output_path` | str | `""` | Preprocessed data output path |
 | `kd_radius` | float | `0.05` | KD-tree merge radius (Å⁻¹) |
-| `n_rotations` | int | `6` | Number of rotational copies |
+| `n_rotations` | int | `6` | Number of rotational copies (1–6, original orientation included; the 60° step is fixed by the hexagonal symmetry) |
 | `stride` | int | `10` | Stride for KD-interpolation |
 | `sort_axes` | bool | `false` | Sort axes to increasing, flip data |
 | `auto_grid` | bool | `false` | Auto-determine grid size from KX/KY |
@@ -101,16 +102,24 @@ documented below.
 
 ## `mrf`
 
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `eta` | float | `0.12` | Default MRF smoothness parameter (overridden per band by `mrf.bands[].eta`) |
+| `num_epochs` | int | `10` | MRF iteration epochs |
+| `max_shift` | int | `10` | Max energy-grid steps a node may move from its DFT prior |
+| `smooth_sigma` | list | `[0.5, 0.5, 0.1]` | Gaussian smooth sigma (kx, ky, E) |
+| `path_interp_method` | str | `"cubic"` | Interpolation for band-path maps (`cubic`, `linear`, `nearest`) |
+| `path_sample_step` | float | `0.005` | Path sample density (Å per sample) |
+
 ### `mrf.bands`
 
 A list of band configurations, each with:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `index` | int | — | DFT band index (×2 for stacked) |
-| `k_scale` | float | — | Momentum scale factor |
-| `offset` | float | — | Initial energy offset (eV) |
-| `eta` | float | — | MRF smoothness parameter |
+| `from_vbm` | int | — | Bands below the valence-band maximum (`0` = VBM itself, `1` = next band down). Independent of `dft.drop_top_bands`; preferred over `index` |
+| `index` | int | — | Absolute position in the stacked band array after `drop_top_bands` (depends on the drop count matching the DFT band count) |
+| `eta` | float | `0.05` | MRF smoothness parameter for this band |
 
 ### `mrf.bsfi`
 
@@ -123,17 +132,12 @@ A list of band configurations, each with:
 
 ### `mrf.bsfi.weights`
 
-The score is `Σ w_i·metric_i / Σ w_i`; setting a weight to `0` disables that component.
+The score is `Σ w_i·metric_i / Σ w_i`; setting a weight to `0` disables that component. All metrics are scaled to [0, 1] (SNR is squashed via `s/(s+1)`), so the weights keep their relative meaning.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `correlation` | float | `0.6` | Weight for dE/dk correlation |
 | `intensity` | float | `0.3` | Weight for intensity ratio |
-| `snr` | float | `0.1` | Weight for signal-to-noise ratio |
+| `snr` | float | `0.1` | Weight for signal-to-noise ratio (squashed to [0, 1)) |
 | `ridge` | float | `0.5` | Weight for band-ridge alignment (1 = band on local intensity ridge) |
-
-### Other MRF fields
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `smooth_sigma` | list | `[0.5, 0.5, 0.1]` | Gaussian smooth sigma (kx, ky, E) |
+| `path_ridge` | float | `0.8` | Weight for band-ridge alignment along the Γ-M-K-Γ path (combined with the 2D score) |

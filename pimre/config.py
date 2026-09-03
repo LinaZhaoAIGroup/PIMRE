@@ -45,7 +45,11 @@ def parse_kpoints(path):
         lines = f.readlines()
     if len(lines) < 4:
         return None
-    npts = int(lines[1].strip())
+    # Line 1 holds the point count per segment ("40" or "40 40" styles).
+    try:
+        npts = int(lines[1].split()[0])
+    except (ValueError, IndexError):
+        return None
     segments = []
     i = 4
     while i < len(lines):
@@ -86,6 +90,7 @@ DEFAULTS = {
         "output_grid": [101, 101],
         "fermi_file": "BAND_GAP",
         "csv_file": "extracted_data.csv",
+        "drop_top_bands": None,
     },
     "lattice": {"a": 5.8077, "b": 5.8077, "c": 9.1297,
                 "alpha": 90.0, "beta": 90.0, "gamma": 120.0},
@@ -128,6 +133,7 @@ DEFAULTS = {
         },
     },
     "mrf": {
+        "eta": 0.12,
         "num_epochs": 10,
         "max_shift": 10,
         "bands": [

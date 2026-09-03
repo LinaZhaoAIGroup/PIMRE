@@ -17,9 +17,11 @@ from pimre.pipeline.dft import run_dft_pipeline
 def main():
     parser = argparse.ArgumentParser(description="Process DFT calculation data into band map.")
     parser.add_argument("--config", default="configs/defaults.yaml", help="Path to default config")
-    parser.add_argument("--dft-csv", required=True, help="Path to DFT CSV file")
+    parser.add_argument("--dft-csv", default=None,
+                        help="Path to DFT CSV file (default: dft.path + dft.csv_file from config)")
     parser.add_argument("--fermi-file", default=None, help="Path to FERMI_ENERGY file")
-    parser.add_argument("--band-gap-file", default=None, help="Path to BAND_GAP file")
+    parser.add_argument("--band-gap-file", default=None,
+                        help="Path to BAND_GAP file (default: dft.path + dft.fermi_file from config)")
     parser.add_argument("--output", default="band_map.h5", help="Output file path")
     parser.add_argument("--output-format", default="h5", choices=["mat", "h5"], help="Output format")
     parser.add_argument("--method", default="grid_cell", choices=["grid_cell", "griddata"],

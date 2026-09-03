@@ -38,6 +38,7 @@ def _bz_params(config):
     """Read BZ grid parameters, defaulting to the pimre_config defaults."""
     bz = config.get("bz", {}) or config.get("dft", {}).get("bz", {})
     return {
+        "n_rotations": int(bz.get("n_rotations", 6)),
         "n_x": int(bz.get("n_x", 70)),
         "n_y": int(bz.get("n_y", 70)),
         "n_plus": int(bz.get("n_plus", 3)),
@@ -45,7 +46,22 @@ def _bz_params(config):
     }
 
 
-def run_dft_pipeline(dft_csv, config_path="configs/defaults.yaml",
+def _resolve_dft_file(config, key):
+    """Resolve a DFT file name from config against ``dft.path``.
+
+    Absolute paths are kept as-is; relative names are joined with the
+    DFT data directory when one is configured.
+    """
+    name = config.get("dft", {}).get(key, "")
+    if not name:
+        return None
+    if os.path.isabs(name):
+        return name
+    dft_dir = config.get("dft", {}).get("path", "")
+    return os.path.join(dft_dir, name) if dft_dir else name
+
+
+def run_dft_pipeline(dft_csv=None, config_path="configs/defaults.yaml",
                      fermi_file=None, band_gap_file=None,
                      output="band_map.h5", output_format="h5",
                      method="grid_cell"):
@@ -53,14 +69,17 @@ def run_dft_pipeline(dft_csv, config_path="configs/defaults.yaml",
 
     Parameters
     ----------
-    dft_csv : str
-        Path to DFT CSV file.
+    dft_csv : str or None
+        Path to DFT CSV file.  If None, resolved from the config keys
+        ``dft.path`` + ``dft.csv_file``.
     config_path : str
         Path to config YAML.
     fermi_file : str or None
         Path to FERMI_ENERGY file.
     band_gap_file : str or None
-        Path to BAND_GAP file.
+        Path to BAND_GAP file.  If both this and ``fermi_file`` are None,
+        resolved from the config keys ``dft.path`` + ``dft.fermi_file``
+        (used as a BAND_GAP file when it exists).
     output : str
         Output file path.
     output_format : str
@@ -76,17 +95,40 @@ def run_dft_pipeline(dft_csv, config_path="configs/defaults.yaml",
     config = load_config(config_path)
     nkx, nky = _k_grid(config)
 
+    if dft_csv is None:
+        dft_csv = _resolve_dft_file(config, "csv_file")
+        if not dft_csv:
+            raise ValueError(
+                "No DFT CSV given: pass --dft-csv or set dft.path and "
+                "dft.csv_file in the config.")
+        print(f"DFT CSV (from config): {dft_csv}")
+
+    if band_gap_file is None and fermi_file is None:
+        candidate = _resolve_dft_file(config, "fermi_file")
+        if candidate and os.path.exists(candidate):
+            band_gap_file = candidate
+            print(f"BAND_GAP file (from config): {candidate}")
+
     if fermi_file:
         fermi_energy = read_fermi_energy(fermi_file)
         print(f"FERMI_ENERGY = {fermi_energy}")
-        vbm_index = None; cbm_index = None
+        vbm_index = None
+        cbm_index = None
     elif band_gap_file:
         fermi_energy, vbm_index, cbm_index = read_band_gap(band_gap_file)
-        print(f"Fermi Energy = {fermi_energy}")
-        print(f"VBM Band Index = {vbm_index}")
-        print(f"CBM Band Index = {cbm_index}")
+        if fermi_energy is None:
+            # Plain FERMI_ENERGY-style file: fall back to the simple reader.
+            fermi_energy = read_fermi_energy(band_gap_file)
+            print(f"BAND_GAP file without VBM/CBM section; "
+                  f"Fermi Energy = {fermi_energy}")
+        else:
+            print(f"Fermi Energy = {fermi_energy}")
+            print(f"VBM Band Index = {vbm_index}")
+            print(f"CBM Band Index = {cbm_index}")
     else:
-        fermi_energy = 0.0; vbm_index = None; cbm_index = None
+        fermi_energy = 0.0
+        vbm_index = None
+        cbm_index = None
         print("Warning: No Fermi energy file provided, using 0.0")
 
     cartesian_coords, energy_bands, ebands = read_dft_csv(dft_csv, fermi_energy, nkx, nky)
@@ -95,7 +137,9 @@ def run_dft_pipeline(dft_csv, config_path="configs/defaults.yaml",
     else:
         print(f"Energy bands shape: {ebands.shape}")
 
-    bz_coords, repeated_bands = expand_bz(cartesian_coords, energy_bands)
+    bz_coords, repeated_bands = expand_bz(
+        cartesian_coords, energy_bands,
+        n_rotations=_bz_params(config)["n_rotations"])
     print(f"BZ coordinates: {bz_coords.shape[0]} points")
 
     has_fermi = bool(fermi_file or band_gap_file)
@@ -110,7 +154,10 @@ def run_dft_pipeline(dft_csv, config_path="configs/defaults.yaml",
 
     if method == "grid_cell":
         bz = _bz_params(config)
-        BANDMAP, CARCOO = build_band_map_3d(bz_coords, repeated_bands, **bz)
+        BANDMAP, CARCOO = build_band_map_3d(
+            bz_coords, repeated_bands,
+            n_x=bz["n_x"], n_y=bz["n_y"], n_plus=bz["n_plus"],
+            scaling_factor=bz["scaling_factor"])
         print(f"Band map shape: {BANDMAP.shape}")
         if gap_id is None:
             gap_id = BANDMAP.shape[0] // 2
@@ -119,7 +166,9 @@ def run_dft_pipeline(dft_csv, config_path="configs/defaults.yaml",
         kx_grid = CARCOO[0]
         ky_grid = CARCOO[1]
     else:
-        mapping, kx_grid, ky_grid = interpolate_to_grid(bz_coords, repeated_bands)
+        out_grid = config.get("dft", {}).get("output_grid", [101, 101])
+        mapping, kx_grid, ky_grid = interpolate_to_grid(
+            bz_coords, repeated_bands, nx=int(out_grid[0]), ny=int(out_grid[1]))
         if gap_id is None:
             gap_id = mapping.shape[0] // 2
         evb = mapping[:gap_id][::-1]

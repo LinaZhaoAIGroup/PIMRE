@@ -45,6 +45,61 @@ BAND_COLORS = np.array([
 ])
 
 
+def resolve_band_indices(bands_cfg, n_conduction, n_stacked, n_dropped=0):
+    """Resolve per-band config entries into stacked-array band indices.
+
+    The stacked band array (see ``load_band_map_h5``) is ordered by
+    descending band energy *after* dropping the ``drop_top_bands`` highest
+    conduction bands, so a plain ``index`` entry depends on the drop count
+    matching the DFT band count.  ``from_vbm`` entries are relative to the
+    valence-band maximum instead: ``from_vbm: 0`` is the VBM itself, 1 the
+    next band below, and so on — independent of the drop count.
+
+    Parameters
+    ----------
+    bands_cfg : list of dict
+        ``mrf.bands`` config entries, each with ``eta`` and either
+        ``index`` (position in the stacked array) or ``from_vbm`` (bands
+        below the VBM).
+    n_conduction : int
+        Number of conduction bands in the band map (before dropping).
+    n_stacked : int
+        Total number of bands after dropping.
+    n_dropped : int
+        Number of top bands that were dropped.
+
+    Returns
+    -------
+    band_idx : list of int
+    """
+    vbm_pos = n_conduction - n_dropped
+    band_idx = []
+    for b in bands_cfg:
+        if "from_vbm" in b:
+            if vbm_pos < 0:
+                raise ValueError(
+                    f"drop_top_bands={n_dropped} exceeds the number of "
+                    f"conduction bands ({n_conduction}); the VBM was dropped "
+                    "from the stack, so 'from_vbm' band selection is impossible. "
+                    "Reduce drop_top_bands or use absolute 'index' entries.")
+            idx = vbm_pos + int(b["from_vbm"])
+            if not 0 <= idx < n_stacked:
+                raise ValueError(
+                    f"Band from_vbm={b['from_vbm']} resolves to stacked index "
+                    f"{idx}, outside the band map (0..{n_stacked - 1}).")
+        elif "index" in b:
+            idx = int(b["index"])
+            if not 0 <= idx < n_stacked:
+                raise ValueError(
+                    f"Band index={idx} outside the band map after dropping "
+                    f"(0..{n_stacked - 1}).")
+        else:
+            raise ValueError(
+                f"Band entry {b} needs either 'index' or 'from_vbm'.")
+        band_idx.append(idx)
+    return band_idx
+
+
 def select_bands_in_window(E_dft, kx_dft, ky_dft, kx, ky, T_inv, band_indices,
                            E_win, margin=5):
     """Report the fraction of each requested DFT band inside the
@@ -283,8 +338,8 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
             f"Unexpected data layout {I.shape} for axes E={E.size}, "
             f"kx={kx.size}, ky={ky.size} in {exp_data}")
 
-    mrf = MrfRec(E=E, kx=kx, ky=ky, I=np.transpose(I_t, (1, 2, 0)), eta=0.12,
-                 max_shift=MAX_SHIFT)
+    mrf = MrfRec(E=E, kx=kx, ky=ky, I=np.transpose(I_t, (1, 2, 0)),
+                 eta=mrf_cfg.get("eta", 0.12), max_shift=MAX_SHIFT)
     mrf.smoothenI(sigma=smooth_sigma)
     print(f"  Exp: E={E.shape}, kx={kx.shape}, ky={ky.shape}, I={I.shape}")
 
@@ -338,7 +393,8 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
     print(f"  T = [[{T[0,0]:.6f}, {T[0,1]:.6f}], [{T[1,0]:.6f}, {T[1,1]:.6f}]]")
     print(f"  isotropic scale={scale:.4f}, rotation={rotation_deg:.2f}°")
 
-    gx = np.argmin(np.abs(kx_dft)); gy = np.argmin(np.abs(ky_dft))
+    gx = np.argmin(np.abs(kx_dft))
+    gy = np.argmin(np.abs(ky_dft))
     K_vec_exp = np.array([kx[K[0]]-kx[G[0]], ky[K[1]]-ky[G[1]]])
     M_vec_exp = np.array([kx[M[0]]-kx[G[0]], ky[M[1]]-ky[G[1]]])
     K_vec_dft = np.array([kx_dft[KP_dft_raw[0]]-kx_dft[gx], ky_dft[KP_dft_raw[1]]-ky_dft[gy]])
@@ -348,7 +404,9 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
     print(f"  |K|/|M|: exp={ratio_exp:.4f}, DFT={ratio_dft:.4f} (ideal=1.155)")
 
     E_dft_orig = E_dft.copy()
-    band_idx = [b["index"] for b in bands_cfg]
+    n_dropped = cfg.get("dft", {}).get("drop_top_bands") or 0
+    band_idx = resolve_band_indices(bands_cfg, len(ecb), len(E_dft),
+                                    n_dropped=n_dropped)
 
     E_win = (E.min(), E.max())
     coverage = select_bands_in_window(E_dft_orig, kx_dft, ky_dft, kx, ky,
@@ -415,7 +473,8 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
     print("  Shared offset search (all bands shifted together) ...")
     scores_shared = np.zeros(len(offsets))
     per_band_scores = np.zeros((N_BANDS, len(offsets)))
-    best_shared_score = -np.inf; best_shared_off = offsets[0]
+    best_shared_score = -np.inf
+    best_shared_off = offsets[0]
     for i_off, off in enumerate(offsets):
         total_bsfi = 0.0
         for ind_band in range(N_BANDS):
@@ -425,7 +484,8 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
             total_bsfi += s
         scores_shared[i_off] = total_bsfi / N_BANDS
         if scores_shared[i_off] > best_shared_score:
-            best_shared_score = scores_shared[i_off]; best_shared_off = off
+            best_shared_score = scores_shared[i_off]
+            best_shared_off = off
     print(f"  Best shared offset = {best_shared_off:+.4f} eV, mean score = {best_shared_score:.4f}")
     print("  Per-band scores at the shared optimum:")
     for ind_band in range(N_BANDS):
@@ -433,16 +493,16 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
         print(f"    band {ind_band}: score={per_band_scores[ind_band, i0]:.4f}")
 
     best_offsets = np.full(N_BANDS, best_shared_off)
-    best_bsfi_per_band = np.full(N_BANDS, best_shared_score)
 
-    best_score = best_bsfi_per_band.mean()
+    best_score = best_shared_score
     print(f"  Mean score = {best_score:.4f}")
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
     ax1.plot(offsets, scores_shared, "b-", linewidth=2)
     ax1.axvline(best_shared_off, color="red", linestyle="--", label=f"best={best_shared_off:+.4f}")
     ax1.set(xlabel="Energy Offset (eV)", ylabel="Combined BSFI", title="Shared offset search")
-    ax1.legend(fontsize=8); ax1.grid(True, alpha=0.3)
+    ax1.legend(fontsize=8)
+    ax1.grid(True, alpha=0.3)
     for ind_band in range(N_BANDS):
         ax2.plot(offsets, per_band_scores[ind_band], color=BAND_COLORS[ind_band],
                  linewidth=1.5, alpha=0.8, label=f"B{ind_band}")

@@ -87,6 +87,12 @@ def compute_grid(cfg):
         KY_rot = KY
     else:
         n_rot = pp["n_rotations"]
+        if not 1 <= int(n_rot) <= 6:
+            raise ValueError(
+                f"preprocessing.n_rotations must be in 1..6 (number of C6 "
+                f"copies, original included); got {n_rot}. Values above 6 "
+                "would duplicate rotations, the 60° step is fixed by the "
+                "hexagonal symmetry.")
         bands_rep = np.repeat(bands[:, :, np.newaxis], n_rot, axis=2)
         bands_rep = bands_rep.reshape(bands.shape[0], bands.shape[1], -1)
 

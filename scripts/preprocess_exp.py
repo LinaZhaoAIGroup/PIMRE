@@ -74,8 +74,9 @@ def main():
 
     if not args.skip_calib:
         kxm, kym = np.meshgrid(kx_out, ky_out, indexing="ij")
-        print("  KD-interp 1 layer for calibration ...")
-        E_temp = KDInterp(bands_rep[10], KX_rot[10], KY_rot[10],
+        calib_layer = min(10, E_grid.size - 1)
+        print(f"  KD-interp layer {calib_layer} for calibration ...")
+        E_temp = KDInterp(bands_rep[calib_layer], KX_rot[calib_layer], KY_rot[calib_layer],
                           radius=cfg["preprocessing"]["kd_radius"],
                           kx_grid=kxm, ky_grid=kym)
         gg = GridCalibrator(E_temp, kx_out, ky_out)
@@ -87,15 +88,17 @@ def main():
 
     E_Mon = preprocess_full(cfg, E_grid, bands_rep, KX_rot, KY_rot, kx_out, ky_out)
 
+    preview_layer = min(10, bands.shape[0] - 1)
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-    ax1.imshow(bands[10], aspect="auto", cmap="plasma", origin="lower",
+    ax1.imshow(bands[preview_layer], aspect="auto", cmap="plasma", origin="lower",
                extent=[ky_angle[0], ky_angle[-1], kx_angle[0], kx_angle[-1]])
-    ax1.set(title="Raw data (layer 10)", xlabel="ky angle", ylabel="kx angle")
+    ax1.set(title=f"Raw data (layer {preview_layer})",
+            xlabel="ky angle", ylabel="kx angle")
     ax1.axvline(cal["ky_shift"], color="red", ls="--")
     ax1.axhline(cal["kx_shift"], color="green", ls="--")
-    ax2.imshow(E_Mon[10], aspect="auto", cmap="plasma", origin="lower",
+    ax2.imshow(E_Mon[preview_layer], aspect="auto", cmap="plasma", origin="lower",
                extent=[ky_out[0], ky_out[-1], kx_out[0], kx_out[-1]])
-    ax2.set(title="Preprocessed (layer 10)",
+    ax2.set(title=f"Preprocessed (layer {preview_layer})",
             xlabel=r"$k_y$ ($\AA^{-1}$)", ylabel=r"$k_x$ ($\AA^{-1}$)")
     ax2.axvline(0, color="red", ls="--", lw=1)
     ax2.axhline(0, color="green", ls="--", lw=1)

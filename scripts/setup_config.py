@@ -244,10 +244,12 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
 
         g = CollapsibleGroup("HDF5 File")
         w = QtWidgets.QWidget()
-        hl = QtWidgets.QHBoxLayout(w); hl.setContentsMargins(0, 2, 0, 2)
+        hl = QtWidgets.QHBoxLayout(w)
+        hl.setContentsMargins(0, 2, 0, 2)
         self._e_hdf5 = QtWidgets.QLineEdit()
         hl.addWidget(self._e_hdf5)
-        btn = QtWidgets.QPushButton("Browse…"); btn.clicked.connect(self._browse_hdf5)
+        btn = QtWidgets.QPushButton("Browse…")
+        btn.clicked.connect(self._browse_hdf5)
         hl.addWidget(btn)
         g.addWidget(w)
         w2, self._e_dataset = _labeled_edit("Dataset:", width=200)
@@ -263,7 +265,10 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
             w_d, self.__dict__[f"_e_{axis_name}_delta"] = _labeled_edit("Delta:", width=100)
             w_n, self.__dict__[f"_e_{axis_name}_npts"] = _labeled_edit("Npts:", width=80)
             w_f, self.__dict__[f"_cb_{axis_name}_flip"] = _labeled_check("Flip:")
-            row.addWidget(w_s); row.addWidget(w_d); row.addWidget(w_n); row.addWidget(w_f)
+            row.addWidget(w_s)
+            row.addWidget(w_d)
+            row.addWidget(w_n)
+            row.addWidget(w_f)
             g.addLayout(row)
             lay.addWidget(g)
 
@@ -271,7 +276,8 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
 
         # Swap kx/ky button
         w = QtWidgets.QWidget()
-        hl = QtWidgets.QHBoxLayout(w); hl.setContentsMargins(0, 2, 0, 2)
+        hl = QtWidgets.QHBoxLayout(w)
+        hl.setContentsMargins(0, 2, 0, 2)
         swap_btn = QtWidgets.QPushButton("Swap kx/ky Angles")
         swap_btn.clicked.connect(self._swap_kx_ky)
         hl.addWidget(swap_btn)
@@ -340,10 +346,12 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
 
         g = CollapsibleGroup("DFT Raw Data Directory")
         w = QtWidgets.QWidget()
-        hl = QtWidgets.QHBoxLayout(w); hl.setContentsMargins(0, 2, 0, 2)
+        hl = QtWidgets.QHBoxLayout(w)
+        hl.setContentsMargins(0, 2, 0, 2)
         self._e_dft_dir = QtWidgets.QLineEdit()
         hl.addWidget(self._e_dft_dir)
-        btn = QtWidgets.QPushButton("Browse…"); btn.clicked.connect(self._browse_dft_dir)
+        btn = QtWidgets.QPushButton("Browse…")
+        btn.clicked.connect(self._browse_dft_dir)
         hl.addWidget(btn)
         g.addWidget(w)
         btn2 = QtWidgets.QPushButton("Read OUTCAR & KPOINTS")
@@ -355,9 +363,12 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
 
         g = CollapsibleGroup("Lattice Parameters")
         grid = QtWidgets.QGridLayout()
-        self._e_a = QtWidgets.QLineEdit(); self._e_b = QtWidgets.QLineEdit()
-        self._e_c = QtWidgets.QLineEdit(); self._e_alpha = QtWidgets.QLineEdit()
-        self._e_beta = QtWidgets.QLineEdit(); self._e_gamma = QtWidgets.QLineEdit()
+        self._e_a = QtWidgets.QLineEdit()
+        self._e_b = QtWidgets.QLineEdit()
+        self._e_c = QtWidgets.QLineEdit()
+        self._e_alpha = QtWidgets.QLineEdit()
+        self._e_beta = QtWidgets.QLineEdit()
+        self._e_gamma = QtWidgets.QLineEdit()
         for col, (label, edit) in enumerate([
             ("a (Å):", self._e_a), ("b (Å):", self._e_b), ("c (Å):", self._e_c),
             ("α (deg):", self._e_alpha), ("β (deg):", self._e_beta), ("γ (deg):", self._e_gamma),
@@ -374,7 +385,9 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         row = QtWidgets.QHBoxLayout()
         w1, self._e_nkx = _labeled_edit("nkx:", width=60)
         w2, self._e_nky = _labeled_edit("nky:", width=60)
-        row.addWidget(w1); row.addWidget(w2); row.addStretch()
+        row.addWidget(w1)
+        row.addWidget(w2)
+        row.addStretch()
         g.addLayout(row)
         lay.addWidget(g)
 
@@ -382,7 +395,9 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         row = QtWidgets.QHBoxLayout()
         w1, self._e_dft_nx = _labeled_edit("nx:", width=60)
         w2, self._e_dft_ny = _labeled_edit("ny:", width=60)
-        row.addWidget(w1); row.addWidget(w2); row.addStretch()
+        row.addWidget(w1)
+        row.addWidget(w2)
+        row.addStretch()
         g.addLayout(row)
         lay.addWidget(g)
 
@@ -402,16 +417,20 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         outcar = os.path.join(dft_dir, "OUTCAR")
         lat = parse_outcar(outcar)
         if lat:
-            self._e_a.setText(str(lat[0])); self._e_b.setText(str(lat[1]))
-            self._e_c.setText(str(lat[2])); self._e_alpha.setText(str(lat[3]))
-            self._e_beta.setText(str(lat[4])); self._e_gamma.setText(str(lat[5]))
+            self._e_a.setText(str(lat[0]))
+            self._e_b.setText(str(lat[1]))
+            self._e_c.setText(str(lat[2]))
+            self._e_alpha.setText(str(lat[3]))
+            self._e_beta.setText(str(lat[4]))
+            self._e_gamma.setText(str(lat[5]))
             msgs.append(f"Lattice: a={lat[0]:.4f} b={lat[1]:.4f} c={lat[2]:.4f} "
                         f"α={lat[3]:.1f} β={lat[4]:.1f} γ={lat[5]:.1f}")
         else:
             msgs.append("OUTCAR not found or could not parse lattice.")
         kgrid = parse_kpoints(os.path.join(dft_dir, "KPOINTS"))
         if kgrid:
-            self._e_nkx.setText(str(kgrid[0])); self._e_nky.setText(str(kgrid[1]))
+            self._e_nkx.setText(str(kgrid[0]))
+            self._e_nky.setText(str(kgrid[1]))
             msgs.append(f"K-grid: {kgrid[0]} × {kgrid[1]}")
         else:
             msgs.append("KPOINTS not found.")
@@ -426,7 +445,9 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         row = QtWidgets.QHBoxLayout()
         w1, self._e_kx_shift = _labeled_edit("kx_shift (deg):", width=100)
         w2, self._e_ky_shift = _labeled_edit("ky_shift (deg):", width=100)
-        row.addWidget(w1); row.addWidget(w2); row.addStretch()
+        row.addWidget(w1)
+        row.addWidget(w2)
+        row.addStretch()
         g.addLayout(row)
         btn = QtWidgets.QPushButton("Launch Gamma Calibration")
         btn.clicked.connect(self._launch_gamma_calib)
@@ -439,7 +460,9 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         row = QtWidgets.QHBoxLayout()
         w1, self._e_kx_gs = _labeled_edit("kx_grid_shift (Å⁻¹):", width=120)
         w2, self._e_ky_gs = _labeled_edit("ky_grid_shift (Å⁻¹):", width=120)
-        row.addWidget(w1); row.addWidget(w2); row.addStretch()
+        row.addWidget(w1)
+        row.addWidget(w2)
+        row.addStretch()
         g.addLayout(row)
         lay.addWidget(g)
 
@@ -485,7 +508,8 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
 
         # Header row
         header = QtWidgets.QWidget()
-        hl = QtWidgets.QHBoxLayout(header); hl.setContentsMargins(0, 2, 0, 2)
+        hl = QtWidgets.QHBoxLayout(header)
+        hl.setContentsMargins(0, 2, 0, 2)
         hl.addWidget(QtWidgets.QLabel(""))
         for c in ["DFT idx", "eta"]:
             hl.addWidget(QtWidgets.QLabel(f"<b>{c}</b>"))
@@ -517,19 +541,28 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         w1, self._e_bsfi_range = _labeled_edit("Offset range (eV):", width=100)
         w2, self._e_bsfi_step = _labeled_edit("Step:", width=80)
         w3, self._e_bsfi_fine = _labeled_edit("Fine-tune:", width=80)
-        row.addWidget(w1); row.addWidget(w2); row.addWidget(w3); row.addStretch()
+        row.addWidget(w1)
+        row.addWidget(w2)
+        row.addWidget(w3)
+        row.addStretch()
         g.addLayout(row)
         row2 = QtWidgets.QHBoxLayout()
         w4, self._e_bsfi_wcorr = _labeled_edit("w_corr:", width=80)
         w5, self._e_bsfi_wint = _labeled_edit("w_int:", width=80)
         w6, self._e_bsfi_wsnr = _labeled_edit("w_snr:", width=80)
         w7, self._e_bsfi_wridge = _labeled_edit("w_ridge:", width=80)
-        row2.addWidget(w4); row2.addWidget(w5); row2.addWidget(w6); row2.addWidget(w7); row2.addStretch()
+        row2.addWidget(w4)
+        row2.addWidget(w5)
+        row2.addWidget(w6)
+        row2.addWidget(w7)
+        row2.addStretch()
         g.addLayout(row2)
         row2b = QtWidgets.QHBoxLayout()
         w8, self._e_bsfi_wpath = _labeled_edit("w_path_ridge:", width=100)
         w9, self._e_bsfi_rsigma = _labeled_edit("ridge_sigma:", width=100)
-        row2b.addWidget(w8); row2b.addWidget(w9); row2b.addStretch()
+        row2b.addWidget(w8)
+        row2b.addWidget(w9)
+        row2b.addStretch()
         g.addLayout(row2b)
         lay.addWidget(g)
 
@@ -539,11 +572,10 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         w1, self._e_smooth = _labeled_edit("Smooth sigma (kx,ky,E):", width=180)
         # Energy offset is shared by all bands (fixed offset mode): the
         # pipeline shifts every band by the same BSFI-optimized value.
-        w2, self._e_offset_mode = _labeled_edit("Offset mode:", width=120)
-        self._e_offset_mode.setReadOnly(True)
-        self._e_offset_mode.setText("shared")
         w3, self._e_max_shift = _labeled_edit("max_shift:", width=80)
-        row.addWidget(w1); row.addWidget(w2); row.addWidget(w3); row.addStretch()
+        row.addWidget(w1)
+        row.addWidget(w3)
+        row.addStretch()
         lay.addLayout(row)
 
         row2 = QtWidgets.QHBoxLayout()
@@ -551,8 +583,10 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         self._cb_path_interp.addItems(["cubic", "linear", "nearest"])
         w4 = QtWidgets.QLabel("Path interp:")
         w5, self._e_path_step = _labeled_edit("Path sample (Å⁻¹/px):", width=100)
-        row2.addWidget(w4); row2.addWidget(self._cb_path_interp)
-        row2.addWidget(w5); row2.addStretch()
+        row2.addWidget(w4)
+        row2.addWidget(self._cb_path_interp)
+        row2.addWidget(w5)
+        row2.addStretch()
         lay.addLayout(row2)
 
         lay.addStretch()
@@ -564,10 +598,12 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
 
         g = CollapsibleGroup("Preprocessing Output")
         w = QtWidgets.QWidget()
-        hl = QtWidgets.QHBoxLayout(w); hl.setContentsMargins(0, 2, 0, 2)
+        hl = QtWidgets.QHBoxLayout(w)
+        hl.setContentsMargins(0, 2, 0, 2)
         self._e_out_path = QtWidgets.QLineEdit()
         hl.addWidget(self._e_out_path)
-        btn = QtWidgets.QPushButton("Browse…"); btn.clicked.connect(self._browse_out)
+        btn = QtWidgets.QPushButton("Browse…")
+        btn.clicked.connect(self._browse_out)
         hl.addWidget(btn)
         g.addWidget(w)
         row = QtWidgets.QHBoxLayout()
@@ -575,12 +611,18 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         w2, self._e_kd_radius = _labeled_edit("KD radius:", width=80)
         w3, self._e_stride = _labeled_edit("Stride:", width=80)
         w4, self._e_nrot = _labeled_edit("N rotations:", width=80)
-        row.addWidget(w1); row.addWidget(w2); row.addWidget(w3); row.addWidget(w4); row.addStretch()
+        row.addWidget(w1)
+        row.addWidget(w2)
+        row.addWidget(w3)
+        row.addWidget(w4)
+        row.addStretch()
         g.addLayout(row)
         row2 = QtWidgets.QHBoxLayout()
         w_s, self._cb_sort_axes = _labeled_check("Sort axes", False)
         w_a, self._cb_auto_grid = _labeled_check("Auto grid", False)
-        row2.addWidget(w_s); row2.addWidget(w_a); row2.addStretch()
+        row2.addWidget(w_s)
+        row2.addWidget(w_a)
+        row2.addStretch()
         g.addLayout(row2)
         row3 = QtWidgets.QHBoxLayout()
         row3.addWidget(QtWidgets.QLabel("Method:"))
@@ -589,7 +631,8 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         row3.addWidget(self._cb_method)
         w_fx, self._cb_flip_kx = _labeled_check("Flip kx", True)
         w_fy, self._cb_flip_ky = _labeled_check("Flip ky", True)
-        row3.addWidget(w_fx); row3.addWidget(w_fy)
+        row3.addWidget(w_fx)
+        row3.addWidget(w_fy)
         w_sr, self._e_smooth_radius = _labeled_edit("Quad smooth radius:", width=80)
         row3.addWidget(w_sr)
         row3.addStretch()
@@ -608,11 +651,13 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         """Add a band row to the MRF band table."""
         ib = len(self._band_rows)
         w = QtWidgets.QWidget()
-        row_lay = QtWidgets.QHBoxLayout(w); row_lay.setContentsMargins(0, 2, 0, 2)
+        row_lay = QtWidgets.QHBoxLayout(w)
+        row_lay.setContentsMargins(0, 2, 0, 2)
         row_lay.addWidget(QtWidgets.QLabel(f"Band {ib}"))
         row = {}
         for key in ["index", "eta"]:
-            e = QtWidgets.QLineEdit(); e.setFixedWidth(80)
+            e = QtWidgets.QLineEdit()
+            e.setFixedWidth(80)
             row_lay.addWidget(e)
             row[key] = e
         del_btn = QtWidgets.QPushButton("✕")
@@ -700,8 +745,6 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         smooth_str = self._e_smooth.text()
         if smooth_str:
             self.cfg["mrf"]["smooth_sigma"] = [float(x) for x in smooth_str.replace(",", " ").split()]
-        # Fixed offset mode: all bands share one BSFI-optimized offset.
-        self.cfg["mrf"]["offset_mode"] = "shared"
         if self._e_max_shift.text():
             self.cfg["mrf"]["max_shift"] = int(self._e_max_shift.text())
         self.cfg["mrf"]["path_interp_method"] = self._cb_path_interp.currentText()
@@ -740,9 +783,12 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         self._e_dft_ny.setText(str(self.cfg["dft"]["output_grid"][1]))
 
         lat = self.cfg["lattice"]
-        self._e_a.setText(str(lat["a"])); self._e_b.setText(str(lat["b"]))
-        self._e_c.setText(str(lat["c"])); self._e_alpha.setText(str(lat["alpha"]))
-        self._e_beta.setText(str(lat["beta"])); self._e_gamma.setText(str(lat["gamma"]))
+        self._e_a.setText(str(lat["a"]))
+        self._e_b.setText(str(lat["b"]))
+        self._e_c.setText(str(lat["c"]))
+        self._e_alpha.setText(str(lat["alpha"]))
+        self._e_beta.setText(str(lat["beta"]))
+        self._e_gamma.setText(str(lat["gamma"]))
 
         cal = self.cfg["calibration"]
         self._e_kx_shift.setText(str(cal["kx_shift"]))
@@ -772,7 +818,6 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         self._e_bsfi_rsigma.setText(str(bsfi.get("ridge_sigma", 0.1)))
 
         self._e_smooth.setText(", ".join(str(x) for x in self.cfg["mrf"]["smooth_sigma"]))
-        self._e_offset_mode.setText(self.cfg["mrf"].get("offset_mode", "shared"))
         self._e_max_shift.setText(str(self.cfg["mrf"].get("max_shift", 10)))
         method = self.cfg["mrf"].get("path_interp_method", "cubic")
         self._cb_path_interp.setCurrentText(method if method in ("cubic", "linear", "nearest") else "cubic")

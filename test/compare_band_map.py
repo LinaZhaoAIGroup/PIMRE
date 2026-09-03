@@ -13,13 +13,12 @@ import sys
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
-import scipy.io as sio
 
 matplotlib.use("Qt5Agg")
 from matplotlib.widgets import RadioButtons, Slider
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from pimre.dft.reader import load_band_map_h5
+from pimre.dft.reader import load_band_map_any
 from pimre.kpath.symmetry import _rotate_around_center, dft_KM
 
 
@@ -28,24 +27,7 @@ def load_band_map(filepath):
 
     Supports .h5 (new format) and .mat (legacy format).
     """
-    if filepath.endswith(".h5"):
-        return load_band_map_h5(filepath)
-
-    mat = sio.loadmat(filepath)
-    evb = np.nan_to_num(mat["evb"][:])
-    ecb = np.nan_to_num(mat["ecb"][:])
-    kxx = mat["kxxsc"]
-    kyy = mat["kyysc"]
-
-    if np.abs(np.sum(np.diff(kxx[:, 0]))) > np.abs(np.sum(np.diff(kxx[0, :]))):
-        ky = kxx[:, 0]
-        kx = kyy[0, :]
-    else:
-        ky = kxx[0, :]
-        kx = kyy[:, 0]
-
-    E_dft = np.vstack((ecb[::-1], evb))
-    return E_dft, evb, ecb, kx, ky
+    return load_band_map_any(filepath)
 
 
 def compute_dft_hsps(kx, ky):

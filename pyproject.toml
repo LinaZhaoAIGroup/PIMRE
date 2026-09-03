@@ -20,11 +20,6 @@ dependencies = [
     "pyqt5>=5.15.11",
 ]
 
-[project.scripts]
-pimre-dft = "pimre.cli:dft"
-pimre-exp = "pimre.cli:exp"
-pimre-mrf = "pimre.cli:mrf"
-
 [project.optional-dependencies]
 notebook = [
     "jupyter>=1.1.1",
@@ -40,10 +35,16 @@ packages = ["pimre"]
 [tool.ruff]
 target-version = "py311"
 line-length = 120
+extend-exclude = ["notebooks"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
 ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# `I` is the standard physics symbol for intensity.
+"pimre/mrf/model.py" = ["E741"]
+"pimre/pipeline/mrf.py" = ["E741"]
 
 [dependency-groups]
 dev = [

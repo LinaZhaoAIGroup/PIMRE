@@ -48,9 +48,10 @@ def ridge_alignment_score(E0, I_t, E_arr, sigma=0.1, window=0.15):
     valid = np.isfinite(E0)
 
     skx, sky = E0.shape
-    e_idx = np.interp(E0.ravel(), E_arr, np.arange(nE))
-    # NaN entries would raise a cast warning / platform-dependent ints;
-    # substitute a safe index — those points are masked out below anyway.
+    # NaN entries would raise an invalid-value warning; those points are
+    # masked out below, so substitute a safe index under a silenced handler.
+    with np.errstate(invalid="ignore"):
+        e_idx = np.interp(E0.ravel(), E_arr, np.arange(nE))
     e_idx = np.where(np.isnan(e_idx), 0.0, e_idx)
     ind = np.round(e_idx).astype(int).clip(0, nE - 1).reshape(skx, sky)
 
@@ -141,7 +142,7 @@ def compute_bsfi_2d(E0, I_t, E_arr, stride=4, w_corr=0.6, w_int=0.3, w_snr=0.1,
     BSFI = Σ w_i · metric_i / Σ w_i with:
       corr:       |corr(dE/dk, dI/dk)| (derivative correlation)
       intensity:  global intensity ratio
-      snr:        band intensity SNR
+      snr:        band intensity SNR, squashed to [0, 1) via s/(s+1)
       ridge:      band-ridge alignment (see ridge_alignment_score)
 
     Setting a weight to 0 disables that component; the score is normalized
@@ -196,6 +197,10 @@ def compute_bsfi_2d(E0, I_t, E_arr, stride=4, w_corr=0.6, w_int=0.3, w_snr=0.1,
 
     snr = (I_band[valid_s].mean() / I_band[valid_s].std()
            if I_band[valid_s].std() > 0 else 0)
+    # Squash the SNR (unbounded in [0, inf)) into [0, 1) so that all BSFI
+    # components share the same scale and the weights keep their relative
+    # meaning (s=1 maps to 0.5, s=9 maps to 0.9).
+    snr = snr / (snr + 1.0)
 
     dE_dkx = np.gradient(E0_f, axis=0)
     dI_dkx = np.gradient(I_band, axis=0)
