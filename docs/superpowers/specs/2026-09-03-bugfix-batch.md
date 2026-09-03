@@ -63,3 +63,28 @@ failing silently downstream.
 (DFT CSV + BAND_GAP → band_map.h5 → synthetic ARPES HDF5 → preprocess →
 MRF reconstruction with `from_vbm` bands) reproduces the expected band
 ordering and completes without warnings.
+
+## Addendum (same day): reconstruction-quality fixes
+
+Visual inspection of the RbTiBi path plots showed reconstructed curves
+missing the measured intensity ridges. Root causes established with
+diagnostic overlays (test/diag_*.png):
+
+1. **Spurious affine scale.** The DFT band map only covers |k| < 0.55 Å⁻¹
+   (K and M points at 0.72/0.62 are outside the data, in the NaN region),
+   yet `compute_affine_transform` fitted K/M there — producing scale 1.37
+   and rotation −32°, which amplifies DFT dispersions by 37% and breaks
+   the Γ-M alignment. New `mrf.alignment: "gamma"` (default) maps DFT→
+   experiment 1:1: both axes are absolute momentum, no scale/rotation is
+   fitted. `mrf.alignment: "hsp"` preserves the legacy Procrustes fit.
+2. **Shared offset is wrong for metallic systems.** The top "valence"
+   bands cross E_F (band full[32] is already above E_F at r = 0.05 Å⁻¹),
+   so bands have very different shapes and one shared shift cannot align
+   them; the per-band score curves peaked anywhere between −0.35 and
+   +0.65 eV. `mrf.offset_mode: "per_band"` (default) lets each band take
+   its own score maximum — matching the notebook workflow, which tuned
+   per-band offsets of 0.62–0.8 eV by hand. `"shared"` remains available.
+
+Both options are user-facing and were added to the setup_config GUI and
+docs/configuration.md. `configs/pimre_config.yaml` sets alignment: gamma
+and offset_mode: per_band.

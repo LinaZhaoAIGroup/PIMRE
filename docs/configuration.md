@@ -107,6 +107,8 @@ documented below.
 | `eta` | float | `0.12` | Default MRF smoothness parameter (overridden per band by `mrf.bands[].eta`) |
 | `num_epochs` | int | `10` | MRF iteration epochs |
 | `max_shift` | int | `10` | Max energy-grid steps a node may move from its DFT prior |
+| `alignment` | str | `"gamma"` | DFT→experiment momentum mapping: `gamma` = identity (1:1, both axes are absolute momentum — recommended), `hsp` = Procrustes similarity fitted from the K/M high-symmetry points (legacy; can produce large spurious scale factors when the DFT grid does not cover K/M) |
+| `offset_mode` | str | `"per_band"` | Energy-offset selection: `per_band` = each band takes its own BSFI optimum (recommended for metallic systems), `shared` = all bands take the global mean-score optimum |
 | `smooth_sigma` | list | `[0.5, 0.5, 0.1]` | Gaussian smooth sigma (kx, ky, E) |
 | `path_interp_method` | str | `"cubic"` | Interpolation for band-path maps (`cubic`, `linear`, `nearest`) |
 | `path_sample_step` | float | `0.005` | Path sample density (Å per sample) |

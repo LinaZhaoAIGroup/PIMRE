@@ -136,6 +136,8 @@ DEFAULTS = {
         "eta": 0.12,
         "num_epochs": 10,
         "max_shift": 10,
+        "alignment": "gamma",
+        "offset_mode": "per_band",
         "bands": [
             {"index": 0, "eta": 0.05},
             {"index": 1, "eta": 0.05},

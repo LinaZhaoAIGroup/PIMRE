@@ -307,6 +307,8 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
     MAX_SHIFT = mrf_cfg.get("max_shift", 10)
     PATH_INTERP_METHOD = mrf_cfg.get("path_interp_method", "cubic")
     PATH_SAMPLE_STEP = mrf_cfg.get("path_sample_step", 0.005)
+    ALIGNMENT = mrf_cfg.get("alignment", "gamma")
+    OFFSET_MODE = mrf_cfg.get("offset_mode", "per_band")
     smooth_sigma = mrf_cfg["smooth_sigma"]
 
     if exp_data is None:
@@ -388,8 +390,21 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
     print("  K/M coverage scores: "
           + ", ".join(f"{k}={v:.2f}" for k, v in sel["scores"].items()))
 
-    T, T_inv, scale, rotation_deg = compute_affine_transform(
-        kx, ky, G, K, M, kx_dft, ky_dft, KP_dft_raw, MP_dft_raw)
+    if ALIGNMENT == "gamma":
+        # 1:1 momentum mapping: both the preprocessed experimental axes and
+        # the DFT band-map axes are absolute momentum (A^-1), so no scale or
+        # rotation is fitted.  This avoids the large spurious scale factors
+        # (e.g. 1.37) that the HSP Procrustes fit produces when the DFT grid
+        # does not cover the K/M points used for the fit.
+        T = np.eye(2)
+        T_inv = np.eye(2)
+        scale = 1.0
+        rotation_deg = 0.0
+        print("  Alignment: gamma (identity transform, 1:1 momentum axes)")
+    else:
+        T, T_inv, scale, rotation_deg = compute_affine_transform(
+            kx, ky, G, K, M, kx_dft, ky_dft, KP_dft_raw, MP_dft_raw)
+        print("  Alignment: hsp Procrustes")
     print(f"  T = [[{T[0,0]:.6f}, {T[0,1]:.6f}], [{T[1,0]:.6f}, {T[1,1]:.6f}]]")
     print(f"  isotropic scale={scale:.4f}, rotation={rotation_deg:.2f}°")
 
@@ -466,19 +481,42 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
         total_w = W_PATH_RIDGE + 1.0
         return (W_PATH_RIDGE * _path_ridge(E0) + _bsfi(E0)) / total_w
 
-    # Shared search: every band is shifted by the same absolute offset and
-    # the mean combined score over ALL bands decides the optimum.  This
-    # prevents a single band from locking the others into its own (possibly
-    # misidentified) position.
-    print("  Shared offset search (all bands shifted together) ...")
+    # Offset search.  The grid scan fills per-band score curves for every
+    # band; how the final per-band offsets are chosen depends on the mode:
+    #   per_band: each band takes its own score maximum.  For metallic
+    #             systems (bands crossing E_F, very different dispersions)
+    #             a single shared shift cannot align all bands at once.
+    #   shared:   all bands take the global mean-score optimum, which
+    #             prevents one band from locking the others into its own
+    #             (possibly misidentified) position.
+    print(f"  Offset search (mode={OFFSET_MODE}), {len(offsets)} offsets ...")
     scores_shared = np.zeros(len(offsets))
     per_band_scores = np.zeros((N_BANDS, len(offsets)))
     best_shared_score = -np.inf
     best_shared_off = offsets[0]
+
+    def occupied_E0(raw_band, off, min_frac=0.02):
+        """Shifted band restricted to its OCCUPIED part (ARPES constraint).
+
+        ARPES only measures states at or below E_F.  In the additive
+        convention E0 = E_dft + offset, a mapped point corresponds to an
+        occupied state only when E0 >= 0 (non-negative binding energy) AND
+        E_dft <= 0 (i.e. E0 <= offset).  Everything else — notably the
+        empty-state segments of bands crossing E_F — is masked to NaN so
+        that the offset search cannot align empty states to the measured
+        intensity.  Returns (masked E0, occupied fraction).
+        """
+        raw = raw_band + off
+        occ = np.isfinite(raw) & (raw >= 0) & (raw_band <= 0)
+        frac = float(np.mean(occ))
+        if frac < min_frac:
+            return np.full(raw_band.shape, np.nan), frac
+        return np.where(occ, raw, np.nan), frac
+
     for i_off, off in enumerate(offsets):
         total_bsfi = 0.0
         for ind_band in range(N_BANDS):
-            E0 = np.reshape(dft_bands[ind_band] + off, (kx.shape[0], ky.shape[0]))
+            E0, _ = occupied_E0(dft_bands[ind_band], off)
             s = _offset_score(E0)
             per_band_scores[ind_band, i_off] = s
             total_bsfi += s
@@ -487,14 +525,24 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
             best_shared_score = scores_shared[i_off]
             best_shared_off = off
     print(f"  Best shared offset = {best_shared_off:+.4f} eV, mean score = {best_shared_score:.4f}")
-    print("  Per-band scores at the shared optimum:")
-    for ind_band in range(N_BANDS):
-        i0 = int(np.argmin(np.abs(offsets - best_shared_off)))
-        print(f"    band {ind_band}: score={per_band_scores[ind_band, i0]:.4f}")
 
-    best_offsets = np.full(N_BANDS, best_shared_off)
-
-    best_score = best_shared_score
+    if OFFSET_MODE == "per_band":
+        best_offsets = np.array([offsets[int(np.argmax(per_band_scores[k]))]
+                                 for k in range(N_BANDS)])
+        best_score = float(np.mean([per_band_scores[k, int(np.argmax(per_band_scores[k]))]
+                                    for k in range(N_BANDS)]))
+        print("  Per-band optimal offsets:")
+        for k in range(N_BANDS):
+            if per_band_scores[k].max() <= 0:
+                print(f"    band {k}: NO occupied alignment found (the band's occupied "
+                      "part never enters the window at any offset); "
+                      "its reconstruction will be empty.")
+            else:
+                print(f"    band {k}: {best_offsets[k]:+.4f} eV "
+                      f"(score={per_band_scores[k, int(np.argmax(per_band_scores[k]))]:.4f})")
+    else:
+        best_offsets = np.full(N_BANDS, best_shared_off)
+        best_score = best_shared_score
     print(f"  Mean score = {best_score:.4f}")
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
@@ -527,8 +575,12 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
         final_offset = float(best_offsets[ind_band])
         mrf.eta = eta
         raw_band = dft_bands[ind_band]
-        invalid_init = ~np.isfinite(raw_band)
-        E0_raw = raw_band + final_offset
+        # Occupied-state constraint: only E0 >= 0 from E_dft <= 0 pixels
+        # (plus DFT coverage) enter the reconstruction; everything else is
+        # masked out after the fit.
+        E0_occ, occ_frac = occupied_E0(raw_band, final_offset)
+        invalid_init = ~np.isfinite(E0_occ)
+        E0_raw = E0_occ
         # Pixels without DFT coverage (NaN) get a neutral mid-window start;
         # they are unconstrained by DFT and are masked out after the fit.
         E0 = np.where(np.isfinite(E0_raw), E0_raw, 0.5 * (E.min() + E.max()))
@@ -541,21 +593,19 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
 
         sym_band(ind_band, recon, mrf.kx, mrf.ky, mrf.lengthKx, mrf.lengthKy)
 
-        # Pixels whose band energy lies outside the measured window have no
-        # experimental constraint; pixels without DFT coverage have no prior.
-        # Mark both NaN instead of clamping to the energy-axis edge (which
-        # would produce a spurious flat band).
-        outside = (E0_raw > E.max()) | (E0_raw < E.min()) | invalid_init
-        recon[ind_band][outside] = np.nan
+        # Mask everything that is not an occupied, DFT-covered pixel: no
+        # experimental constraint / no prior / empty state (E_dft > 0).
+        recon[ind_band][invalid_init] = np.nan
         bsfi_b = _bsfi(recon[ind_band])
 
         final_params.append({
             "band": ind_band, "dft_band": int(band_idx[ind_band]),
             "T": [float(T[0,0]), float(T[0,1]), float(T[1,0]), float(T[1,1])],
             "offset": float(final_offset), "eta": float(eta), "bsfi_score": float(bsfi_b),
-            "outside_window_frac": float(np.mean(outside)),
+            "occupied_frac": occ_frac,
         })
-        print(f"  Band {ind_band}: offset={final_offset:+.4f} eV, eta={eta}, BSFI={bsfi_b:.4f}")
+        print(f"  Band {ind_band}: offset={final_offset:+.4f} eV, eta={eta}, BSFI={bsfi_b:.4f}, "
+              f"occupied {100*occ_frac:.1f}% of grid")
 
     np.save(os.path.join(output_dir, "recon_bands.npy"), recon)
 
@@ -581,6 +631,8 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
 
     save_data = {
         "crystal_data": crystal,
+        "alignment": ALIGNMENT,
+        "offset_mode": OFFSET_MODE,
         "bsfi_weights": {"correlation": W_CORR, "intensity": W_INT,
                          "snr": W_SNR, "ridge": W_RIDGE,
                          "path_ridge": W_PATH_RIDGE},

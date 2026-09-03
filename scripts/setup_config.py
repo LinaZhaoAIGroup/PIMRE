@@ -570,13 +570,29 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
 
         row = QtWidgets.QHBoxLayout()
         w1, self._e_smooth = _labeled_edit("Smooth sigma (kx,ky,E):", width=180)
-        # Energy offset is shared by all bands (fixed offset mode): the
-        # pipeline shifts every band by the same BSFI-optimized value.
         w3, self._e_max_shift = _labeled_edit("max_shift:", width=80)
         row.addWidget(w1)
         row.addWidget(w3)
         row.addStretch()
         lay.addLayout(row)
+
+        row1b = QtWidgets.QHBoxLayout()
+        self._cb_alignment = QtWidgets.QComboBox()
+        self._cb_alignment.addItems(["gamma", "hsp"])
+        w_al = QtWidgets.QLabel("Alignment:")
+        w_al.setToolTip("gamma: 1:1 momentum mapping (recommended). "
+                        "hsp: Procrustes fit from K/M high-symmetry points.")
+        self._cb_offset_mode = QtWidgets.QComboBox()
+        self._cb_offset_mode.addItems(["per_band", "shared"])
+        w_om = QtWidgets.QLabel("Offset mode:")
+        w_om.setToolTip("per_band: each band takes its own BSFI optimum "
+                        "(recommended for metallic systems). shared: one offset for all bands.")
+        row1b.addWidget(w_al)
+        row1b.addWidget(self._cb_alignment)
+        row1b.addWidget(w_om)
+        row1b.addWidget(self._cb_offset_mode)
+        row1b.addStretch()
+        lay.addLayout(row1b)
 
         row2 = QtWidgets.QHBoxLayout()
         self._cb_path_interp = QtWidgets.QComboBox()
@@ -747,6 +763,8 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
             self.cfg["mrf"]["smooth_sigma"] = [float(x) for x in smooth_str.replace(",", " ").split()]
         if self._e_max_shift.text():
             self.cfg["mrf"]["max_shift"] = int(self._e_max_shift.text())
+        self.cfg["mrf"]["alignment"] = self._cb_alignment.currentText()
+        self.cfg["mrf"]["offset_mode"] = self._cb_offset_mode.currentText()
         self.cfg["mrf"]["path_interp_method"] = self._cb_path_interp.currentText()
         self.cfg["mrf"]["path_sample_step"] = float(self._e_path_step.text() or 0.005)
 
@@ -819,6 +837,8 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
 
         self._e_smooth.setText(", ".join(str(x) for x in self.cfg["mrf"]["smooth_sigma"]))
         self._e_max_shift.setText(str(self.cfg["mrf"].get("max_shift", 10)))
+        self._cb_alignment.setCurrentText(self.cfg["mrf"].get("alignment", "gamma"))
+        self._cb_offset_mode.setCurrentText(self.cfg["mrf"].get("offset_mode", "per_band"))
         method = self.cfg["mrf"].get("path_interp_method", "cubic")
         self._cb_path_interp.setCurrentText(method if method in ("cubic", "linear", "nearest") else "cubic")
         self._e_path_step.setText(str(self.cfg["mrf"].get("path_sample_step", 0.005)))
