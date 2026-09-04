@@ -81,3 +81,36 @@ near-E_F bands present across the whole Γ-M-K-Γ path, as in
   `Data/` path needs no manual DFT calibration at all.
 - Reference batch script snaps the DFT prior without MRF optimization;
   the notebook runs `iter_para(100)`. PIMRE covers both via `num_epochs`.
+
+## Addendum — full chain from `dataCliu.h5` (2026-09-04, later the same day)
+
+Data lineage (confirmed with the user): `dataCliu.h5`
+(`RbTiBi/map`, 111 E × 700 kx-angle × 36 ky-angle, angular space,
+incomplete BZ) is the experimental source; `Data/HPES_preprocessed_new.h5`
+is its symmetry-completed product made by the reference notebook
+`2.exp_data_pre.ipynb` (Angle2Mon → Γ shift → 6-copy 60° rotation
+expansion → KDInterp radius 0.05 onto a 700² grid, stride 10).
+`Data/band_map.mat` is the preprocessed theory data.
+
+PIMRE chain validated end-to-end:
+
+1. **Preprocessing** (`scripts/preprocess_exp.py --skip-calib`,
+   test config = tracked config with `preprocessing.n_rotations: 6` —
+   PIMRE counts total copies, the reference notebook uses original+5
+   rotations = 6 — and `output_path: test/exp_datacliu.h5`): complete
+   hexagonal BZ (~±1.0 Å⁻¹), Γ centred.
+2. **Alignment**: automatic mirror registration again picked the 30°-
+   ambiguous branch (θ=28.0° → T rotation −31.8°). Manual
+   `calibration.hsps.rotation_angle: 60.0` (the lattice value; 58.0, the
+   branch-corrected registration, scores the same within noise) gives
+   `T = [[1.2319, 0.0077], [−0.0050, 1.2535]]`, rotation −0.23°, scales
+   1.232/1.253 — consistent with the HPES-file result (1.225/1.247),
+   confirming the preprocessed map's momentum calibration matches.
+3. **Reconstruction** (`test/config_datacliu[100].yaml`, band_map.mat,
+   reference band recipe): 10-epoch path plots reproduce the HPES/
+   reference 5-band picture on all three cuts; 100-epoch run as the
+   final artifact (`test/datacliu100/`).
+
+Test configs (gitignored, in `test/`): `config_datacliu.yaml` (θ=60),
+`config_datacliu100.yaml`, plus `config_hpes.yaml` / `config_hpes100.yaml`
+for the HPES-file input path.
