@@ -576,6 +576,18 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         row.addStretch()
         lay.addLayout(row)
 
+        row1a = QtWidgets.QHBoxLayout()
+        self._cb_device = QtWidgets.QComboBox()
+        self._cb_device.addItems(["auto", "cpu", "cuda"])
+        w_dev = QtWidgets.QLabel("Device:")
+        w_dev.setToolTip("Torch device for the MRF checkerboard update. "
+                         "auto: CUDA GPU if available, else CPU (≈10x faster on GPU, "
+                         "identical results). cpu/cuda force a specific device.")
+        row1a.addWidget(w_dev)
+        row1a.addWidget(self._cb_device)
+        row1a.addStretch()
+        lay.addLayout(row1a)
+
         row1b = QtWidgets.QHBoxLayout()
         self._cb_alignment = QtWidgets.QComboBox()
         self._cb_alignment.addItems(["hsp", "gamma"])
@@ -647,8 +659,18 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         row2 = QtWidgets.QHBoxLayout()
         w_s, self._cb_sort_axes = _labeled_check("Sort axes", False)
         w_a, self._cb_auto_grid = _labeled_check("Auto grid", False)
+        w_n, self._cb_normalize = _labeled_check("Normalize", True)
+        w_n.setToolTip("Divide the raw counts by the global maximum so the "
+                       "intensity lies in [0, 1] (same convention as the "
+                       "reference HPES preprocessed data). Applied to raw "
+                       "input before rotation/interpolation.")
+        w_w, self._e_workers = _labeled_edit("Workers (0=auto):", width=90)
+        w_w.setToolTip("Number of parallel processes for the per-layer KD/quadrant "
+                       "interpolation. 0 = use all CPU cores, 1 = serial.")
         row2.addWidget(w_s)
         row2.addWidget(w_a)
+        row2.addWidget(w_n)
+        row2.addWidget(w_w)
         row2.addStretch()
         g.addLayout(row2)
         row3 = QtWidgets.QHBoxLayout()
@@ -687,6 +709,12 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
             e.setFixedWidth(80)
             row_lay.addWidget(e)
             row[key] = e
+        row["index"].setToolTip(
+            "DFT band selector: an integer is the absolute position in the "
+            "stacked band array (after drop_top_bands); 'vbm:N' selects the "
+            "band N steps below the valence-band maximum (0 = VBM), "
+            "independent of drop_top_bands.")
+        row["eta"].setToolTip("MRF smoothness parameter eta for this band.")
         del_btn = QtWidgets.QPushButton("✕")
         del_btn.setFixedWidth(30)
         del_btn.clicked.connect(lambda: self._remove_band_row(w))
@@ -752,10 +780,12 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
 
         bands = []
         for ib, row in enumerate(self._band_rows):
-            bands.append({
-                "index": int(row["index"].text() or ib),
-                "eta": float(row["eta"].text() or 1e-6),
-            })
+            raw = row["index"].text().strip().lower()
+            eta = float(row["eta"].text() or 1e-6)
+            if raw.startswith("vbm"):
+                bands.append({"from_vbm": int(raw.split(":")[-1] or 0), "eta": eta})
+            else:
+                bands.append({"index": int(raw or ib), "eta": eta})
         self.cfg["mrf"]["bands"] = bands
 
         bsfi = self.cfg["mrf"]["bsfi"]
@@ -777,6 +807,7 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         self.cfg["mrf"]["alignment"] = self._cb_alignment.currentText()
         self.cfg["mrf"]["offset_mode"] = self._cb_offset_mode.currentText()
         self.cfg["mrf"]["occupied_only"] = self._cb_occ.currentText() == "true"
+        self.cfg["mrf"]["device"] = self._cb_device.currentText()
         self.cfg["mrf"]["path_interp_method"] = self._cb_path_interp.currentText()
         self.cfg["mrf"]["path_sample_step"] = float(self._e_path_step.text() or 0.005)
 
@@ -789,6 +820,8 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         pp["n_rotations"] = int(self._e_nrot.text() or 6)
         pp["sort_axes"] = self._cb_sort_axes.isChecked()
         pp["auto_grid"] = self._cb_auto_grid.isChecked()
+        pp["normalize"] = self._cb_normalize.isChecked()
+        pp["workers"] = int(self._e_workers.text() or 0)
         pp.setdefault("quadrant", {})
         pp["quadrant"]["flip_kx"] = self._cb_flip_kx.isChecked()
         pp["quadrant"]["flip_ky"] = self._cb_flip_ky.isChecked()
@@ -833,7 +866,10 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
             self._add_band_row()
         for ib, band in enumerate(self.cfg["mrf"]["bands"]):
             if ib < len(self._band_rows):
-                self._band_rows[ib]["index"].setText(str(band["index"]))
+                if "from_vbm" in band:
+                    self._band_rows[ib]["index"].setText(f"vbm:{band['from_vbm']}")
+                else:
+                    self._band_rows[ib]["index"].setText(str(band["index"]))
                 self._band_rows[ib]["eta"].setText(str(band["eta"]))
 
         bsfi = self.cfg["mrf"]["bsfi"]
@@ -852,6 +888,7 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         self._cb_alignment.setCurrentText(self.cfg["mrf"].get("alignment", "hsp"))
         self._cb_offset_mode.setCurrentText(self.cfg["mrf"].get("offset_mode", "per_band"))
         self._cb_occ.setCurrentText("true" if self.cfg["mrf"].get("occupied_only", True) else "false")
+        self._cb_device.setCurrentText(self.cfg["mrf"].get("device", "auto"))
         method = self.cfg["mrf"].get("path_interp_method", "cubic")
         self._cb_path_interp.setCurrentText(method if method in ("cubic", "linear", "nearest") else "cubic")
         self._e_path_step.setText(str(self.cfg["mrf"].get("path_sample_step", 0.005)))
@@ -866,6 +903,8 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         self._e_nrot.setText(str(pp["n_rotations"]))
         self._cb_sort_axes.setChecked(pp.get("sort_axes", False))
         self._cb_auto_grid.setChecked(pp.get("auto_grid", False))
+        self._cb_normalize.setChecked(pp.get("normalize", True))
+        self._e_workers.setText(str(pp.get("workers", 0)))
         q = pp.get("quadrant", {})
         self._cb_flip_kx.setChecked(q.get("flip_kx", True))
         self._cb_flip_ky.setChecked(q.get("flip_ky", True))

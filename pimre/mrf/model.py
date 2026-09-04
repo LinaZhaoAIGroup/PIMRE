@@ -31,9 +31,14 @@ class MrfRec:
         Maximum number of energy-grid steps a node may move away from its
         initial value (E0). None disables the constraint. Prevents the band
         from being pulled across to a neighbouring band during iteration.
+    device : str or torch.device
+        Torch device for the parallel (checkerboard) update. "auto" picks
+        CUDA when available, else CPU. The result is independent of the
+        device up to float32 rounding; only ``iter_para`` runs on it.
     """
 
-    def __init__(self, E, kx=None, ky=None, I=None, E0=None, eta=0.1, max_shift=None):
+    def __init__(self, E, kx=None, ky=None, I=None, E0=None, eta=0.1,
+                 max_shift=None, device="auto"):
         if kx is None and ky is None:
             raise Exception("Either kx or ky need to be specified!")
         elif kx is None:
@@ -53,6 +58,10 @@ class MrfRec:
             self.I += np.min(self.I[self.I > 0])
         self.eta = eta
         self.max_shift = int(max_shift) if max_shift is not None else None
+        if device is None or str(device) == "auto":
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        else:
+            self.device = torch.device(device)
 
         if E0 is None:
             self.indEb = np.ones((self.lengthKx, self.lengthKy), int) * int(self.lengthE / 2)
@@ -210,7 +219,8 @@ class MrfRec:
         lengthKy = 2 * (ny_full // 2)
         indX, indY = np.meshgrid(np.arange(lengthKx, step=2), np.arange(lengthKy, step=2), indexing="ij")
 
-        E1d = torch.tensor(self.E / (np.sqrt(2) * self.eta), dtype=torch.float32)
+        E1d = torch.tensor(self.E / (np.sqrt(2) * self.eta), dtype=torch.float32,
+                           device=self.device)
         E3d = E1d.reshape(1, 1, -1)
 
         logI = []
@@ -221,12 +231,15 @@ class MrfRec:
             indEb_row = []
             indEb0_row = []
             for j in range(2):
-                logI_row.append(torch.tensor(np.log(self.I[indX + i, indY + j, :]), dtype=torch.float32))
+                logI_row.append(torch.tensor(np.log(self.I[indX + i, indY + j, :]),
+                                             dtype=torch.float32, device=self.device))
                 indEb_row.append(torch.tensor(
-                    np.expand_dims(self.indEb[indX + i, indY + j], 2), dtype=torch.long
+                    np.expand_dims(self.indEb[indX + i, indY + j], 2),
+                    dtype=torch.long, device=self.device
                 ))
                 indEb0_row.append(torch.tensor(
-                    np.expand_dims(self.indE0[indX + i, indY + j], 2), dtype=torch.long
+                    np.expand_dims(self.indE0[indX + i, indY + j], 2),
+                    dtype=torch.long, device=self.device
                 ))
             logI.append(logI_row)
             indEb.append(indEb_row)
@@ -252,7 +265,7 @@ class MrfRec:
         # Extract results
         for i in range(2):
             for j in range(2):
-                self.indEb[indX + i, indY + j] = indEb[i][j].squeeze(2).numpy()
+                self.indEb[indX + i, indY + j] = indEb[i][j].squeeze(2).cpu().numpy()
 
         # Sequential update of trailing odd rows/columns not covered above
         logI_np = np.log(self.I)
@@ -369,7 +382,7 @@ class MrfRec:
         extent (trailing odd row/column) have no pair partner here and are
         represented by their intensity term only.
         """
-        total = torch.tensor(0.0)
+        total = torch.tensor(0.0, device=E1d.device)
         for i in range(2):
             for j in range(2):
                 # Intensity of the SELECTED bin only (logI holds the full
