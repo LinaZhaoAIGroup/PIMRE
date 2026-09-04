@@ -73,7 +73,7 @@ mrf:
       snr: 0.1
   max_shift: 10
   num_epochs: 10
-  alignment: gamma
+  alignment: hsp
   offset_mode: per_band
   path_interp_method: cubic
   path_sample_step: 0.005

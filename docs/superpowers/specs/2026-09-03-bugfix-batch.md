@@ -70,13 +70,17 @@ Visual inspection of the RbTiBi path plots showed reconstructed curves
 missing the measured intensity ridges. Root causes established with
 diagnostic overlays (test/diag_*.png):
 
-1. **Spurious affine scale.** The DFT band map only covers |k| < 0.55 Å⁻¹
-   (K and M points at 0.72/0.62 are outside the data, in the NaN region),
-   yet `compute_affine_transform` fitted K/M there — producing scale 1.37
-   and rotation −32°, which amplifies DFT dispersions by 37% and breaks
-   the Γ-M alignment. New `mrf.alignment: "gamma"` (default) maps DFT→
-   experiment 1:1: both axes are absolute momentum, no scale/rotation is
-   fitted. `mrf.alignment: "hsp"` preserves the legacy Procrustes fit.
+1. **Alignment mode.** The experimental and theoretical momentum scales
+   differ; the theory grid must be stretched so that its K and M
+   high-symmetry points land on the experimental ones. The reference
+   implementation (mrf_bsfi_pipeline.py) solves the 2x2 system exactly,
+   `T = S_exp @ inv(S_dft)` (anisotropic scaling + rotation).
+   `mrf.alignment: "hsp"` (default) does this; `"gamma"` is an identity
+   mapping that is only valid when both axes already share the same
+   absolute calibration. (An earlier draft of this addendum dismissed the
+   HSP-derived scale of ~1.37 as spurious — that was wrong; the scale is
+   the genuine theory-to-experiment stretch and is also consistent with
+   the size of the observed hexagonal pattern.)
 2. **Shared offset is wrong for metallic systems.** The top "valence"
    bands cross E_F (band full[32] is already above E_F at r = 0.05 Å⁻¹),
    so bands have very different shapes and one shared shift cannot align
@@ -84,7 +88,13 @@ diagnostic overlays (test/diag_*.png):
    +0.65 eV. `mrf.offset_mode: "per_band"` (default) lets each band take
    its own score maximum — matching the notebook workflow, which tuned
    per-band offsets of 0.62–0.8 eV by hand. `"shared"` remains available.
+3. **Occupied-state constraint.** ARPES measures only states at/below
+   E_F. In the additive convention E0 = E_dft + offset, the offset search
+   could previously align the EMPTY segments (E_dft > 0) of metallic bands
+   to the measured intensity. The search and the reconstruction now
+   restrict each band to its occupied part (E0 >= 0 from E_dft <= 0);
+   offsets with no occupied overlap score zero with an explicit warning.
 
-Both options are user-facing and were added to the setup_config GUI and
-docs/configuration.md. `configs/pimre_config.yaml` sets alignment: gamma
-and offset_mode: per_band.
+Both alignment and offset mode are user-facing and were added to the
+setup_config GUI and docs/configuration.md. `configs/pimre_config.yaml`
+sets alignment: hsp and offset_mode: per_band.

@@ -307,7 +307,7 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
     MAX_SHIFT = mrf_cfg.get("max_shift", 10)
     PATH_INTERP_METHOD = mrf_cfg.get("path_interp_method", "cubic")
     PATH_SAMPLE_STEP = mrf_cfg.get("path_sample_step", 0.005)
-    ALIGNMENT = mrf_cfg.get("alignment", "gamma")
+    ALIGNMENT = mrf_cfg.get("alignment", "hsp")
     OFFSET_MODE = mrf_cfg.get("offset_mode", "per_band")
     smooth_sigma = mrf_cfg["smooth_sigma"]
 
@@ -391,22 +391,23 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
           + ", ".join(f"{k}={v:.2f}" for k, v in sel["scores"].items()))
 
     if ALIGNMENT == "gamma":
-        # 1:1 momentum mapping: both the preprocessed experimental axes and
-        # the DFT band-map axes are absolute momentum (A^-1), so no scale or
-        # rotation is fitted.  This avoids the large spurious scale factors
-        # (e.g. 1.37) that the HSP Procrustes fit produces when the DFT grid
-        # does not cover the K/M points used for the fit.
+        # 1:1 mapping — only valid when both momentum axes are already in
+        # consistent absolute units (same lattice calibration on both sides).
         T = np.eye(2)
         T_inv = np.eye(2)
         scale = 1.0
         rotation_deg = 0.0
         print("  Alignment: gamma (identity transform, 1:1 momentum axes)")
     else:
+        # HSP alignment: the theory momentum scale differs from the
+        # experimental one; T stretches/rotates the DFT grid so that its
+        # K and M high-symmetry points land on the experimental ones.
         T, T_inv, scale, rotation_deg = compute_affine_transform(
             kx, ky, G, K, M, kx_dft, ky_dft, KP_dft_raw, MP_dft_raw)
-        print("  Alignment: hsp Procrustes")
+        print("  Alignment: hsp (Gamma-K / Gamma-M vectors matched exactly)")
     print(f"  T = [[{T[0,0]:.6f}, {T[0,1]:.6f}], [{T[1,0]:.6f}, {T[1,1]:.6f}]]")
-    print(f"  isotropic scale={scale:.4f}, rotation={rotation_deg:.2f}°")
+    print(f"  scale_x={np.linalg.norm(T[:, 0]):.4f}, scale_y={np.linalg.norm(T[:, 1]):.4f}, "
+          f"rotation={rotation_deg:.2f}°")
 
     gx = np.argmin(np.abs(kx_dft))
     gy = np.argmin(np.abs(ky_dft))

@@ -578,10 +578,11 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
 
         row1b = QtWidgets.QHBoxLayout()
         self._cb_alignment = QtWidgets.QComboBox()
-        self._cb_alignment.addItems(["gamma", "hsp"])
+        self._cb_alignment.addItems(["hsp", "gamma"])
         w_al = QtWidgets.QLabel("Alignment:")
-        w_al.setToolTip("gamma: 1:1 momentum mapping (recommended). "
-                        "hsp: Procrustes fit from K/M high-symmetry points.")
+        w_al.setToolTip("hsp: stretch/rotate the DFT grid so its K/M points land on the "
+                        "experimental ones (recommended). gamma: identity, only when both "
+                        "momentum axes already share the same absolute calibration.")
         self._cb_offset_mode = QtWidgets.QComboBox()
         self._cb_offset_mode.addItems(["per_band", "shared"])
         w_om = QtWidgets.QLabel("Offset mode:")
@@ -837,7 +838,7 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
 
         self._e_smooth.setText(", ".join(str(x) for x in self.cfg["mrf"]["smooth_sigma"]))
         self._e_max_shift.setText(str(self.cfg["mrf"].get("max_shift", 10)))
-        self._cb_alignment.setCurrentText(self.cfg["mrf"].get("alignment", "gamma"))
+        self._cb_alignment.setCurrentText(self.cfg["mrf"].get("alignment", "hsp"))
         self._cb_offset_mode.setCurrentText(self.cfg["mrf"].get("offset_mode", "per_band"))
         method = self.cfg["mrf"].get("path_interp_method", "cubic")
         self._cb_path_interp.setCurrentText(method if method in ("cubic", "linear", "nearest") else "cubic")

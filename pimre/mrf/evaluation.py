@@ -227,14 +227,21 @@ def compute_bsfi_2d(E0, I_t, E_arr, stride=4, w_corr=0.6, w_int=0.3, w_snr=0.1,
 # ── Affine transform ──
 
 def compute_affine_transform(kx, ky, G, K, M, kx_dft, ky_dft, KP_dft_raw, MP_dft_raw):
-    """Compute a similarity transform T (isotropic scale + rotation) that
-    maps DFT → experiment.
+    """Compute the 2x2 affine transform T that maps DFT -> experiment.
 
-    T is fitted from the Γ→K and Γ→M vectors in both spaces via the
-    Procrustes problem, i.e. T = s·R with a single scale s and one rotation
-    R.  This enforces the physical constraint that the momentum scaling is
-    isotropic (only lattice-parameter errors should be absorbed, not
-    anisotropic distortion).
+    The experimental and theoretical momentum scales differ, so the theory
+    grid must be stretched onto the experimental one.  T is determined by
+    exactly matching the Gamma->K and Gamma->M vectors in both spaces:
+
+        T @ [K_vec_dft, M_vec_dft] = [K_vec_exp, M_vec_dft]
+        T = S_exp @ inv(S_dft)
+
+    This is the general 2x2 solution (anisotropic scaling + rotation, as in
+    the reference mrf_bsfi_pipeline.py).  The high-symmetry points used for
+    the fit must be found independently on each side (exp registration /
+    manual calibration on one side, the analytic DFT k-grid points on the
+    other) — the DFT grid usually does not even cover its own K/M points,
+    which is precisely why a fixed scale assumption is wrong.
 
     Parameters
     ----------
@@ -243,20 +250,20 @@ def compute_affine_transform(kx, ky, G, K, M, kx_dft, ky_dft, KP_dft_raw, MP_dft
     G, K, M : tuple
         High-symmetry point indices in experimental grid.
     kx_dft, ky_dft : 1D array
-        DFT momentum axes (original, unscaled).
+        DFT momentum axes.
     KP_dft_raw, MP_dft_raw : tuple
         K and M point indices in DFT grid.
 
     Returns
     -------
     T : 2×2 array
-        Similarity transform matrix (s·R).
+        Affine transform matrix (DFT -> experiment).
     T_inv : 2×2 array
-        Inverse transform.
+        Inverse transform (experiment -> DFT).
     scale : float
-        Isotropic scale factor.
+        Isotropic-equivalent scale factor sqrt(|det T|).
     rotation_deg : float
-        Rotation angle in degrees.
+        Rotation angle of T in degrees.
     """
     g_dft_x = np.argmin(np.abs(kx_dft))
     g_dft_y = np.argmin(np.abs(ky_dft))
@@ -272,20 +279,11 @@ def compute_affine_transform(kx, ky, G, K, M, kx_dft, ky_dft, KP_dft_raw, MP_dft
     S_dft = np.column_stack((K_vec_dft, M_vec_dft))
     S_exp = np.column_stack((K_vec_exp, M_vec_exp))
 
-    # Procrustes: T = s·R minimizing ||S_exp - s·R·S_dft||_F
-    A = S_exp @ S_dft.T
-    U, Sigma, Vt = np.linalg.svd(A)
-    R = U @ Vt
-    if np.linalg.det(R) < 0:
-        Vt[-1] *= -1
-        R = U @ Vt
-    s = float(np.trace(np.diag(Sigma))) / (np.linalg.norm(S_dft, "fro") ** 2)
-
-    T = s * R
+    T = S_exp @ np.linalg.inv(S_dft)
     T_inv = np.linalg.inv(T)
 
-    scale = s
-    rotation_deg = np.rad2deg(np.arctan2(R[1, 0], R[0, 0]))
+    scale = float(np.sqrt(abs(np.linalg.det(T))))
+    rotation_deg = np.rad2deg(np.arctan2(T[1, 0], T[0, 0]))
 
     return T, T_inv, scale, rotation_deg
 

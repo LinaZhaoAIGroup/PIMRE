@@ -107,7 +107,7 @@ documented below.
 | `eta` | float | `0.12` | Default MRF smoothness parameter (overridden per band by `mrf.bands[].eta`) |
 | `num_epochs` | int | `10` | MRF iteration epochs |
 | `max_shift` | int | `10` | Max energy-grid steps a node may move from its DFT prior |
-| `alignment` | str | `"gamma"` | DFT→experiment momentum mapping: `gamma` = identity (1:1, both axes are absolute momentum — recommended), `hsp` = Procrustes similarity fitted from the K/M high-symmetry points (legacy; can produce large spurious scale factors when the DFT grid does not cover K/M) |
+| `alignment` | str | `"hsp"` | DFT→experiment momentum mapping: `hsp` = the experimental and theoretical momentum scales differ, so the DFT grid is stretched/rotated by exactly matching the Γ→K and Γ→M vectors on both sides (`T = S_exp @ inv(S_dft)`, as in the reference implementation) — recommended; `gamma` = identity transform, only valid when both axes already share the same absolute momentum calibration |
 | `offset_mode` | str | `"per_band"` | Energy-offset selection: `per_band` = each band takes its own BSFI optimum (recommended for metallic systems), `shared` = all bands take the global mean-score optimum |
 | `smooth_sigma` | list | `[0.5, 0.5, 0.1]` | Gaussian smooth sigma (kx, ky, E) |
 | `path_interp_method` | str | `"cubic"` | Interpolation for band-path maps (`cubic`, `linear`, `nearest`) |
