@@ -125,6 +125,8 @@ DEFAULTS = {
         "output_path": "",
         "sort_axes": False,
         "auto_grid": False,
+        "normalize": True,
+        "workers": 0,
         "quadrant": {
             "flip_kx": True,
             "flip_ky": True,
@@ -136,6 +138,7 @@ DEFAULTS = {
         "eta": 0.12,
         "num_epochs": 10,
         "max_shift": 10,
+        "device": "auto",
         "alignment": "hsp",
         "offset_mode": "per_band",
         "bands": [

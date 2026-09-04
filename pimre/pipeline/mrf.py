@@ -343,9 +343,11 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
             f"kx={kx.size}, ky={ky.size} in {exp_data}")
 
     mrf = MrfRec(E=E, kx=kx, ky=ky, I=np.transpose(I_t, (1, 2, 0)),
-                 eta=mrf_cfg.get("eta", 0.12), max_shift=MAX_SHIFT)
+                 eta=mrf_cfg.get("eta", 0.12), max_shift=MAX_SHIFT,
+                 device=mrf_cfg.get("device", "auto"))
     mrf.smoothenI(sigma=smooth_sigma)
-    print(f"  Exp: E={E.shape}, kx={kx.shape}, ky={ky.shape}, I={I.shape}")
+    print(f"  Exp: E={E.shape}, kx={kx.shape}, ky={ky.shape}, I={I.shape}"
+          f", device={mrf.device}")
 
     E_dft, evb, ecb, kx_dft, ky_dft = load_band_map_any(
         band_map, drop_top_bands=cfg.get("dft", {}).get("drop_top_bands"))
@@ -687,6 +689,7 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
                          "path_ridge": W_PATH_RIDGE},
         "ridge_sigma": RIDGE_SIGMA,
         "max_shift": MAX_SHIFT,
+        "device": str(mrf.device),
         "bsfi_offset_range": [-BSFI_OFFSET_RANGE, BSFI_OFFSET_RANGE],
         "bsfi_offset_step": BSFI_OFFSET_STEP,
         "affine_T": [[float(T[0,0]), float(T[0,1])], [float(T[1,0]), float(T[1,1])]],

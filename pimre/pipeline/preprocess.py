@@ -8,6 +8,9 @@ Replicates the workflow from 2.exp_data_pre.ipynb:
 4. Save preprocessed data as HDF5
 """
 
+import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
 import h5py
 import numpy as np
 
@@ -18,6 +21,31 @@ from pimre.experiment.calibration import (
     quadrant_symmetrize,
     save_preprocessed_h5,
 )
+
+
+def _interp_layer(task):
+    """Interpolate a single energy layer (worker for the layer pool).
+
+    Parameters
+    ----------
+    task : tuple
+        (method, bands_layer, KX_layer, KY_layer, kx_grid, ky_grid,
+         kd_radius, quadrant_cfg).
+
+    Returns
+    -------
+    E_layer : 2D array
+        Interpolated intensity of one energy layer.
+    """
+    method, bands_i, kx_i, ky_i, kxm, kym, radius, qcfg = task
+    if method == "quadrant":
+        return quadrant_symmetrize(
+            bands_i, kx_i, ky_i,
+            flip_kx=qcfg["flip_kx"], flip_ky=qcfg["flip_ky"],
+            smooth_radius=qcfg["smooth_radius"], fill_radius=qcfg["fill_radius"],
+            kx_grid=kxm, ky_grid=kym)
+    return KDInterp(bands_i, kx_i, ky_i, radius=radius,
+                    kx_grid=kxm, ky_grid=kym)
 
 
 def compute_grid(cfg):
@@ -43,6 +71,17 @@ def compute_grid(cfg):
             d = d[p]
         bands = d[:]
     print(f"  Raw data: {bands.shape}")
+
+    if pp.get("normalize", True):
+        # Normalize raw counts to [0, 1] by the global maximum (same
+        # convention as the reference HPES preprocessed data, whose
+        # intensity maximum is 1).  The MRF/BSFI metrics are scale
+        # invariant, but normalized input keeps logs, background
+        # thresholds and visual comparisons on a sane footing.
+        vmax = float(np.max(bands))
+        if vmax > 0:
+            bands = bands / vmax
+            print(f"  Normalized intensity by global max = {vmax:.4g} -> 1.0")
 
     E_grid = np.linspace(ar["energy"]["start"],
                          ar["energy"]["start"] + ar["energy"]["delta"] * (ar["energy"]["npts"] - 1),
@@ -137,7 +176,13 @@ def compute_grid(cfg):
 
 
 def preprocess_full(cfg, E_grid, bands_rep, KX_rot, KY_rot, kx_out, ky_out):
-    """KD-interpolation on all layers (slow).
+    """KD-interpolation on all computed layers.
+
+    Layers at multiples of ``stride`` are interpolated; the rest are
+    linearly blended afterwards.  The computed layers are independent, so
+    with ``preprocessing.workers`` != 1 they are distributed over a process
+    pool (the per-layer cubic ``griddata`` is single-threaded, which makes
+    layer-level parallelism the effective speedup).
 
     Parameters
     ----------
@@ -189,18 +234,43 @@ def preprocess_full(cfg, E_grid, bands_rep, KX_rot, KY_rot, kx_out, ky_out):
     kxm, kym = np.meshgrid(kx_out, ky_out, indexing="ij")
     E_Mon = np.zeros((bands_rep.shape[0], n_out, n_out))
     stride = pp["stride"]
-    for i in range(0, bands_rep.shape[0], stride):
-        if i % 50 == 0:
+    layers = list(range(0, bands_rep.shape[0], stride))
+    qq = pp.get("quadrant", {})
+    qcfg = {"flip_kx": bool(qq.get("flip_kx", True)),
+            "flip_ky": bool(qq.get("flip_ky", True)),
+            "smooth_radius": qq.get("smooth_radius", 0.02),
+            "fill_radius": qq.get("fill_radius", 0.03)}
+    try:
+        workers = int(pp.get("workers", 0))
+    except (TypeError, ValueError):
+        workers = 0
+    n_par = max(1, min(len(layers), workers if workers > 0
+                       else (os.cpu_count() or 1)))
+    if n_par > 1:
+        print(f"  Parallel layer interpolation: {n_par} processes "
+              f"({len(layers)} computed layers)")
+        tasks = [(method, bands_rep[i], KX_rot[i], KY_rot[i],
+                  kxm, kym, pp["kd_radius"], qcfg) for i in layers]
+        with ProcessPoolExecutor(max_workers=n_par) as pool:
+            futures = {pool.submit(_interp_layer, t): i
+                       for i, t in zip(layers, tasks)}
+            for done, fut in enumerate(as_completed(futures), start=1):
+                E_Mon[futures[fut]] = fut.result()
+                print(f"    layer {futures[fut]}/{bands_rep.shape[0]} "
+                      f"done ({done}/{len(layers)})")
+    else:
+        for i in layers:
             print(f"    layer {i}/{bands_rep.shape[0]}")
-        if method == "quadrant":
-            E_Mon[i] = quadrant_symmetrize(
-                bands_rep[i], KX_rot[i], KY_rot[i],
-                flip_kx=flip_kx, flip_ky=flip_ky,
-                smooth_radius=smooth_radius, fill_radius=fill_radius,
-                kx_grid=kxm, ky_grid=kym)
-        else:
-            E_Mon[i] = KDInterp(bands_rep[i], KX_rot[i], KY_rot[i],
-                                radius=pp["kd_radius"], kx_grid=kxm, ky_grid=kym)
+            if method == "quadrant":
+                E_Mon[i] = quadrant_symmetrize(
+                    bands_rep[i], KX_rot[i], KY_rot[i],
+                    flip_kx=flip_kx, flip_ky=flip_ky,
+                    smooth_radius=smooth_radius, fill_radius=fill_radius,
+                    kx_grid=kxm, ky_grid=kym)
+            else:
+                E_Mon[i] = KDInterp(bands_rep[i], KX_rot[i], KY_rot[i],
+                                    radius=pp["kd_radius"], kx_grid=kxm,
+                                    ky_grid=kym)
     # Layers at multiples of stride are computed; the rest are linearly
     # interpolated between the surrounding computed layers.  hi is clamped
     # to the last computed layer so that a tail beyond it extends that

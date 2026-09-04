@@ -12,6 +12,46 @@ from scipy.spatial import cKDTree
 # --- Angle to momentum conversion ---
 
 
+def _neighborhood_sums(tree, points, values, radius, chunk=2048):
+    """KD-tree radius neighborhoods: per-point sums and counts.
+
+    Querying and accumulating in chunks keeps the memory footprint bounded:
+    scipy's ``query_ball_point`` returns lists of Python ints (~450 MB for
+    25k dense points) and a global flat-index array plus its fancy-index
+    temporaries would hold ~1 GB live per worker; with ~200 MB per chunk a
+    12-process pool stays inside physical memory.  Per point, the
+    contributions are still summed in query order, so the means match the
+    original per-point Python loop to float rounding.
+
+    Returns
+    -------
+    sum_x, sum_y, sum_v : ndarray
+        Per-point sums of the neighbor coordinates and values.
+    counts : ndarray of int64
+        Per-point neighborhood sizes.
+    """
+    n = points.shape[0]
+    sum_x = np.zeros(n)
+    sum_y = np.zeros(n)
+    sum_v = np.zeros(n)
+    counts = np.zeros(n, dtype=np.int64)
+    for start in range(0, n, chunk):
+        stop = min(start + chunk, n)
+        nb = tree.query_ball_point(points[start:stop], r=radius,
+                                   return_sorted=False)
+        c = np.fromiter((len(x) for x in nb), dtype=np.int64, count=stop - start)
+        counts[start:stop] = c
+        f = np.concatenate(nb).astype(np.int64, copy=False)
+        s = np.repeat(np.arange(stop - start, dtype=np.int64), c)
+        sum_x[start:stop] = np.bincount(s, weights=points[f, 0],
+                                        minlength=stop - start)
+        sum_y[start:stop] = np.bincount(s, weights=points[f, 1],
+                                        minlength=stop - start)
+        sum_v[start:stop] = np.bincount(s, weights=values[f],
+                                        minlength=stop - start)
+    return sum_x, sum_y, sum_v, counts
+
+
 
 
 
@@ -79,6 +119,13 @@ def KDInterp(bands, KX, KY, radius=0.05, kx_grid=None, ky_grid=None):
     kx_grid, ky_grid : ndarray
         2D coordinate grids for interpolation.
 
+    Notes
+    -----
+    The neighborhood means and the cubic interpolation are vectorized, but
+    the per-layer cost is dominated by the single-threaded cubic
+    ``griddata``; parallelize over energy layers with
+    ``preprocessing.workers`` in the pipeline instead.
+
     Returns
     -------
     E_Mon : ndarray
@@ -88,20 +135,17 @@ def KDInterp(bands, KX, KY, radius=0.05, kx_grid=None, ky_grid=None):
     values_source = bands.ravel()
 
     tree = cKDTree(points_source)
-    neighbors_indices = tree.query_ball_point(points_source, r=radius, return_sorted=False)
+    sum_x, sum_y, sum_v, counts = _neighborhood_sums(
+        tree, points_source, values_source, radius)
 
-    new_points = []
-    new_values = []
-    for i in range(len(points_source)):
-        indices_in_neighborhood = neighbors_indices[i]
-        points_in_neighborhood = points_source[indices_in_neighborhood]
-        values_in_neighborhood = values_source[indices_in_neighborhood]
-        new_points.append(np.mean(points_in_neighborhood, axis=0))
-        new_values.append(np.mean(values_in_neighborhood))
+    # Every point is its own neighbor, so each neighborhood holds at least
+    # one element and the division below is safe.
+    new_points = np.column_stack((sum_x / counts, sum_y / counts))
+    new_values = sum_v / counts
 
     cubic_map = griddata(
-        np.array(new_points),
-        np.array(new_values),
+        new_points,
+        new_values,
         (kx_grid.ravel(), ky_grid.ravel()),
         method="cubic",
     )
@@ -224,9 +268,9 @@ def quadrant_symmetrize(bands, KX, KY, flip_kx=True, flip_ky=True,
 
     if smooth_radius:
         tree = cKDTree(pts)
-        neighbors = tree.query_ball_point(pts, r=float(smooth_radius),
-                                          return_sorted=False)
-        vals = np.array([vals[i].mean() for i in neighbors])
+        _, _, sum_v, counts = _neighborhood_sums(tree, pts, vals,
+                                                 float(smooth_radius))
+        vals = sum_v / counts
 
     if kx_grid is None or ky_grid is None:
         n = int(np.ceil(np.max(np.abs(pts[:, 0]))))

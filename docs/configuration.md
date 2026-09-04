@@ -108,6 +108,8 @@ valence manifold.
 | `stride` | int | `10` | Stride for KD-interpolation |
 | `sort_axes` | bool | `false` | Sort axes to increasing, flip data |
 | `auto_grid` | bool | `false` | Auto-determine grid size from KX/KY |
+| `normalize` | bool | `true` | Divide the raw counts by the global intensity maximum so the data lies in [0, 1] (same convention as the reference HPES preprocessed data, whose maximum is 1). Applied to raw input before rotation/interpolation; the MRF/BSFI metrics are scale-invariant, so this changes bookkeeping, not the reconstruction |
+| `workers` | int | `0` | Number of parallel processes for the per-layer KD/quadrant interpolation. `0` = use all CPU cores, `1` = serial. The computed layers (every `stride`-th) are independent, so layer-level parallelism is the effective speedup; the per-layer cubic `griddata` is single-threaded |
 | `method` | str | `"kdtree"` | Preprocessing method: `kdtree`, `quadrant`, or `direct` |
 | `quadrant.flip_kx` | bool | `true` | Mirror across ky=0 (expand into kx<0) |
 | `quadrant.flip_ky` | bool | `true` | Mirror across kx=0 (expand into ky<0) |
@@ -121,6 +123,7 @@ valence manifold.
 | `eta` | float | `0.12` | Default MRF smoothness parameter (overridden per band by `mrf.bands[].eta`) |
 | `num_epochs` | int | `10` | MRF iteration epochs |
 | `max_shift` | int | `10` | Max energy-grid steps a node may move from its DFT prior |
+| `device` | str | `"auto"` | Torch device for the MRF checkerboard update: `auto` = CUDA GPU if available, else CPU; `cpu`/`cuda` force a device. On an RTX 2070 SUPER the GPU runs ~10× faster with bit-identical results (verified on the dataCliu chain) |
 | `alignment` | str | `"hsp"` | DFT→experiment momentum mapping: `hsp` = the experimental and theoretical momentum scales differ, so the DFT grid is stretched/rotated by exactly matching the Γ→K and Γ→M vectors on both sides (`T = S_exp @ inv(S_dft)`, as in the reference implementation) — recommended; `gamma` = identity transform, only valid when both axes already share the same absolute momentum calibration |
 | `offset_mode` | str | `"per_band"` | Energy-offset selection: `per_band` = each band takes its own BSFI optimum over the full grid; `shared` = all bands take the global mean-score optimum; `hierarchical` = shared coarse search followed by a per-band fine-tune within ±`bsfi.fine_tune_range` of the shared optimum (reference behaviour; prevents band-order crossing) |
 | `occupied_only` | bool | `true` | Restrict bands and offset search to occupied states (`E0 >= 0` and `E_dft <= 0`). `false` aligns full bands including empty-state segments (reference behaviour for near-E_F metallic bands) |
