@@ -402,7 +402,7 @@ def load_band_map_h5(filepath, drop_top_bands=None):
     return E_dft, evb, ecb, kx, ky
 
 
-def load_band_map_mat(filepath):
+def load_band_map_mat(filepath, drop_top_bands=None):
     """Load a legacy MATLAB .mat band map.
 
     Returns the same tuple as :func:`load_band_map_h5` (without coverage
@@ -422,6 +422,8 @@ def load_band_map_mat(filepath):
         kx = kyy[:, 0]
 
     E_dft = np.vstack((ecb[::-1], evb))
+    if drop_top_bands:
+        E_dft = E_dft[drop_top_bands:]
     return E_dft, evb, ecb, kx, ky
 
 
@@ -429,4 +431,4 @@ def load_band_map_any(filepath, drop_top_bands=None):
     """Load a band map from .h5 (current) or .mat (legacy) by extension."""
     if filepath.endswith(".h5"):
         return load_band_map_h5(filepath, drop_top_bands=drop_top_bands)
-    return load_band_map_mat(filepath)
+    return load_band_map_mat(filepath, drop_top_bands=drop_top_bands)

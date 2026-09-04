@@ -21,7 +21,7 @@ from scipy.interpolate import interp1d
 from scipy.signal import savgol_filter
 
 from pimre.config import crystallographic_data, load_config
-from pimre.dft.reader import load_band_map_h5
+from pimre.dft.reader import load_band_map_any
 from pimre.kpath.path import bandpath_map as bpm
 from pimre.kpath.path import points2path
 from pimre.kpath.symmetry import (
@@ -298,6 +298,7 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
     NUM_EPOCHS = mrf_cfg.get("num_epochs", 10)
     BSFI_OFFSET_RANGE = bsfi_cfg["offset_range"]
     BSFI_OFFSET_STEP = bsfi_cfg["offset_step"]
+    FINE_TUNE_RANGE = bsfi_cfg.get("fine_tune_range", 0.05)
     W_CORR = bsfi_cfg["weights"]["correlation"]
     W_INT = bsfi_cfg["weights"]["intensity"]
     W_SNR = bsfi_cfg["weights"]["snr"]
@@ -309,6 +310,7 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
     PATH_SAMPLE_STEP = mrf_cfg.get("path_sample_step", 0.005)
     ALIGNMENT = mrf_cfg.get("alignment", "hsp")
     OFFSET_MODE = mrf_cfg.get("offset_mode", "per_band")
+    OCCUPIED_ONLY = mrf_cfg.get("occupied_only", True)
     smooth_sigma = mrf_cfg["smooth_sigma"]
 
     if exp_data is None:
@@ -345,7 +347,7 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
     mrf.smoothenI(sigma=smooth_sigma)
     print(f"  Exp: E={E.shape}, kx={kx.shape}, ky={ky.shape}, I={I.shape}")
 
-    E_dft, evb, ecb, kx_dft, ky_dft = load_band_map_h5(
+    E_dft, evb, ecb, kx_dft, ky_dft = load_band_map_any(
         band_map, drop_top_bands=cfg.get("dft", {}).get("drop_top_bands"))
     print(f"  DFT: E_dft={E_dft.shape}, kx_dft={kx_dft.shape}, ky_dft={ky_dft.shape}")
 
@@ -383,8 +385,9 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
               f" scale={dft_calib.get('scale', 1.0):.3f}")
     else:
         KP_dft_raw, MP_dft_raw = dft_KM(kx_dft, ky_dft)
-    k_ang = (30 + k_sel * 60) % 360
-    m_ang = (60 + m_sel * 60) % 360
+    theta_deg = float(result.rotation_angle)
+    k_ang = (theta_deg + k_sel * 60) % 360
+    m_ang = (theta_deg - 30 + m_sel * 60) % 360
     print(f"  HSPs: G={G}, K{k_ang}°={K}, M{m_ang}°={M} "
           f"(source={result.source}, coverage={sel['coverage']:.2f})")
     print("  K/M coverage scores: "
@@ -497,17 +500,24 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
     best_shared_off = offsets[0]
 
     def occupied_E0(raw_band, off, min_frac=0.02):
-        """Shifted band restricted to its OCCUPIED part (ARPES constraint).
+        """Shifted band restricted to measured (ARPES-visible) states.
 
-        ARPES only measures states at or below E_F.  In the additive
-        convention E0 = E_dft + offset, a mapped point corresponds to an
-        occupied state only when E0 >= 0 (non-negative binding energy) AND
-        E_dft <= 0 (i.e. E0 <= offset).  Everything else — notably the
-        empty-state segments of bands crossing E_F — is masked to NaN so
-        that the offset search cannot align empty states to the measured
-        intensity.  Returns (masked E0, occupied fraction).
+        With ``occupied_only`` (default): ARPES only measures states at or
+        below E_F.  In the additive convention E0 = E_dft + offset, a mapped
+        point corresponds to an occupied state only when E0 >= 0
+        (non-negative binding energy) AND E_dft <= 0.  Everything else —
+        notably the empty-state segments of bands crossing E_F — is masked
+        to NaN so that the offset search cannot align empty states to the
+        measured intensity.
+
+        Without it (reference-style full-band alignment): only pixels
+        without DFT coverage are masked; empty-state segments stay in and
+        the band is aligned as a whole.  Returns (masked E0, valid fraction).
         """
         raw = raw_band + off
+        if not OCCUPIED_ONLY:
+            finite = np.isfinite(raw)
+            return np.where(finite, raw, np.nan), float(np.mean(finite))
         occ = np.isfinite(raw) & (raw >= 0) & (raw_band <= 0)
         frac = float(np.mean(occ))
         if frac < min_frac:
@@ -544,6 +554,40 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
     else:
         best_offsets = np.full(N_BANDS, best_shared_off)
         best_score = best_shared_score
+        print("  Per-band scores at optimal shared offset:")
+        for k in range(N_BANDS):
+            print(f"    band {k}: {per_band_scores[k].max():.4f}")
+
+    if OFFSET_MODE == "hierarchical":
+        # Stage 2: per-band fine-tune within ±fine_tune_range of the shared
+        # optimum (reference behaviour).  Constraining each band to stay near
+        # the shared offset prevents band-order crossing from per-band
+        # argmax over the full coarse grid.
+        fine_step = BSFI_OFFSET_STEP / 2.0
+        n_fine = int(2 * FINE_TUNE_RANGE / fine_step) + 1
+        fine_offsets = np.linspace(best_shared_off - FINE_TUNE_RANGE,
+                                   best_shared_off + FINE_TUNE_RANGE, n_fine)
+        print(f"  Stage 2: per-band fine-tune within ±{FINE_TUNE_RANGE:.2f} eV "
+              f"of shared best ({n_fine} offsets) ...")
+        best_offsets = np.zeros(N_BANDS)
+        fine_best = np.zeros(N_BANDS)
+        for k in range(N_BANDS):
+            fine_scores = np.array([
+                _offset_score(occupied_E0(dft_bands[k], off)[0])
+                for off in fine_offsets])
+            imax = int(np.argmax(fine_scores))
+            if fine_scores[imax] <= 0:
+                best_offsets[k] = best_shared_off
+                print(f"    band {k}: no measured alignment in the fine "
+                      "window; keeping shared offset")
+                continue
+            best_offsets[k] = float(fine_offsets[imax])
+            fine_best[k] = fine_scores[imax]
+            print(f"    band {k}: {best_offsets[k]:+.4f} eV "
+                  f"(Δ={best_offsets[k] - best_shared_off:+.4f}, "
+                  f"score={fine_scores[imax]:.4f})")
+        if np.any(fine_best > 0):
+            best_score = float(np.mean(fine_best[fine_best > 0]))
     print(f"  Mean score = {best_score:.4f}")
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
@@ -576,9 +620,11 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
         final_offset = float(best_offsets[ind_band])
         mrf.eta = eta
         raw_band = dft_bands[ind_band]
-        # Occupied-state constraint: only E0 >= 0 from E_dft <= 0 pixels
-        # (plus DFT coverage) enter the reconstruction; everything else is
-        # masked out after the fit.
+        # Occupied-state constraint (config mrf.occupied_only, default on):
+        # only E0 >= 0 from E_dft <= 0 pixels enter the reconstruction.
+        # With occupied_only: false the full band is used, reference-style;
+        # either way, pixels without DFT coverage (NaN) get a neutral
+        # mid-window start and are masked out after the fit.
         E0_occ, occ_frac = occupied_E0(raw_band, final_offset)
         invalid_init = ~np.isfinite(E0_occ)
         E0_raw = E0_occ
@@ -594,8 +640,8 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
 
         sym_band(ind_band, recon, mrf.kx, mrf.ky, mrf.lengthKx, mrf.lengthKy)
 
-        # Mask everything that is not an occupied, DFT-covered pixel: no
-        # experimental constraint / no prior / empty state (E_dft > 0).
+        # Mask everything that is not a DFT-covered, measured pixel (with
+        # occupied_only: true this also drops empty-state segments).
         recon[ind_band][invalid_init] = np.nan
         bsfi_b = _bsfi(recon[ind_band])
 
@@ -634,6 +680,8 @@ def run_mrf_pipeline(config_path=None, exp_data=None, band_map=None, output_dir=
         "crystal_data": crystal,
         "alignment": ALIGNMENT,
         "offset_mode": OFFSET_MODE,
+        "occupied_only": OCCUPIED_ONLY,
+        "fine_tune_range": FINE_TUNE_RANGE,
         "bsfi_weights": {"correlation": W_CORR, "intensity": W_INT,
                          "snr": W_SNR, "ridge": W_RIDGE,
                          "path_ridge": W_PATH_RIDGE},

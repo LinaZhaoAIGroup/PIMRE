@@ -584,14 +584,24 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
                         "experimental ones (recommended). gamma: identity, only when both "
                         "momentum axes already share the same absolute calibration.")
         self._cb_offset_mode = QtWidgets.QComboBox()
-        self._cb_offset_mode.addItems(["per_band", "shared"])
+        self._cb_offset_mode.addItems(["per_band", "shared", "hierarchical"])
         w_om = QtWidgets.QLabel("Offset mode:")
         w_om.setToolTip("per_band: each band takes its own BSFI optimum "
-                        "(recommended for metallic systems). shared: one offset for all bands.")
+                        "(recommended for metallic systems). shared: one offset for all bands. "
+                        "hierarchical: shared coarse search + per-band fine-tune within "
+                        "±bsfi.fine_tune_range (reference behaviour).")
+        self._cb_occ = QtWidgets.QComboBox()
+        self._cb_occ.addItems(["true", "false"])
+        w_occ = QtWidgets.QLabel("Occupied only:")
+        w_occ.setToolTip("true: restrict bands to occupied states (E0>=0 and E_dft<=0). "
+                         "false: align full bands including empty-state segments "
+                         "(reference behaviour for near-E_F metallic bands).")
         row1b.addWidget(w_al)
         row1b.addWidget(self._cb_alignment)
         row1b.addWidget(w_om)
         row1b.addWidget(self._cb_offset_mode)
+        row1b.addWidget(w_occ)
+        row1b.addWidget(self._cb_occ)
         row1b.addStretch()
         lay.addLayout(row1b)
 
@@ -766,6 +776,7 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
             self.cfg["mrf"]["max_shift"] = int(self._e_max_shift.text())
         self.cfg["mrf"]["alignment"] = self._cb_alignment.currentText()
         self.cfg["mrf"]["offset_mode"] = self._cb_offset_mode.currentText()
+        self.cfg["mrf"]["occupied_only"] = self._cb_occ.currentText() == "true"
         self.cfg["mrf"]["path_interp_method"] = self._cb_path_interp.currentText()
         self.cfg["mrf"]["path_sample_step"] = float(self._e_path_step.text() or 0.005)
 
@@ -840,6 +851,7 @@ class ConfigSetupWindow(QtWidgets.QMainWindow):
         self._e_max_shift.setText(str(self.cfg["mrf"].get("max_shift", 10)))
         self._cb_alignment.setCurrentText(self.cfg["mrf"].get("alignment", "hsp"))
         self._cb_offset_mode.setCurrentText(self.cfg["mrf"].get("offset_mode", "per_band"))
+        self._cb_occ.setCurrentText("true" if self.cfg["mrf"].get("occupied_only", True) else "false")
         method = self.cfg["mrf"].get("path_interp_method", "cubic")
         self._cb_path_interp.setCurrentText(method if method in ("cubic", "linear", "nearest") else "cubic")
         self._e_path_step.setText(str(self.cfg["mrf"].get("path_sample_step", 0.005)))

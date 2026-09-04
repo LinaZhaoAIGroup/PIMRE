@@ -69,8 +69,15 @@ documented below.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `manual` | bool | `false` | Use manual BZ rotation angle |
-| `rotation_angle` | float | `0.0` | User-specified BZ rotation (deg) |
+| `rotation_angle` | float | `0.0` | User-specified BZ rotation (deg): absolute K-ring direction, `K_i` at `rotation_angle + 60i`, `M_i` at `rotation_angle − 30 + 60i` |
 | `scale` | float | `1.0` | Momentum scale factor |
+
+`calibration.dft_hsps` uses the same fields for the DFT-side HSPs in
+`dft_KM`. Note the hexagonal 30° ambiguity: automatic mirror registration
+cannot distinguish the K-ring at 0° from 30°, so if the affine transform
+comes out with a spurious ±30° rotation, set `rotation_angle` manually
+(60.0 for the reference `band_map.mat` / `HPES_preprocessed_new.h5` pair,
+which reproduces the reference `T` exactly).
 
 ## `dft`
 
@@ -82,6 +89,13 @@ documented below.
 | `k_grid` | list | `[20, 20]` | DFT k-point grid size |
 | `output_grid` | list | `[101, 101]` | Output interpolation grid size (used by the `griddata` method) |
 | `drop_top_bands` | int or null | `null` | Number of highest-energy conduction bands to drop from the stacked band structure. The stack is ordered by descending band energy (highest conduction band first, VBM at position `n_conduction - drop_top_bands`), so plain `mrf.bands.index` entries depend on this number matching the DFT band count. Prefer `from_vbm` entries (see `mrf.bands`) |
+
+The band map passed to the MRF stage (`--band-map`) may be the pipeline's
+`.h5` product or a legacy MATLAB `.mat` (`evb`/`ecb`/`kxxsc`/`kyysc`, as in
+the reference `band_map.mat`); `drop_top_bands` applies to both. For the
+legacy `.mat` the reference recipe is `drop_top_bands: 33` on a file with
+37 conduction bands, leaving the four near-E_F conduction bands plus the
+valence manifold.
 
 ## `preprocessing`
 
@@ -108,7 +122,8 @@ documented below.
 | `num_epochs` | int | `10` | MRF iteration epochs |
 | `max_shift` | int | `10` | Max energy-grid steps a node may move from its DFT prior |
 | `alignment` | str | `"hsp"` | DFT→experiment momentum mapping: `hsp` = the experimental and theoretical momentum scales differ, so the DFT grid is stretched/rotated by exactly matching the Γ→K and Γ→M vectors on both sides (`T = S_exp @ inv(S_dft)`, as in the reference implementation) — recommended; `gamma` = identity transform, only valid when both axes already share the same absolute momentum calibration |
-| `offset_mode` | str | `"per_band"` | Energy-offset selection: `per_band` = each band takes its own BSFI optimum (recommended for metallic systems), `shared` = all bands take the global mean-score optimum |
+| `offset_mode` | str | `"per_band"` | Energy-offset selection: `per_band` = each band takes its own BSFI optimum over the full grid; `shared` = all bands take the global mean-score optimum; `hierarchical` = shared coarse search followed by a per-band fine-tune within ±`bsfi.fine_tune_range` of the shared optimum (reference behaviour; prevents band-order crossing) |
+| `occupied_only` | bool | `true` | Restrict bands and offset search to occupied states (`E0 >= 0` and `E_dft <= 0`). `false` aligns full bands including empty-state segments (reference behaviour for near-E_F metallic bands) |
 | `smooth_sigma` | list | `[0.5, 0.5, 0.1]` | Gaussian smooth sigma (kx, ky, E) |
 | `path_interp_method` | str | `"cubic"` | Interpolation for band-path maps (`cubic`, `linear`, `nearest`) |
 | `path_sample_step` | float | `0.005` | Path sample density (Å per sample) |
@@ -129,7 +144,7 @@ A list of band configurations, each with:
 |-------|------|---------|-------------|
 | `offset_range` | float | `1.0` | BSFI offset search range (eV) |
 | `offset_step` | float | `0.1` | BSFI offset search step (eV) |
-| `fine_tune_range` | float | `0.05` | Legacy per-band fine-tune range (kept for GUI compatibility; the pipeline now searches the full `offset_range` per band) |
+| `fine_tune_range` | float | `0.05` | Per-band fine-tune half-range around the shared optimum in `offset_mode: hierarchical` (eV) |
 | `ridge_sigma` | float | `0.1` | Width of the ridge alignment penalty (eV) |
 
 ### `mrf.bsfi.weights`

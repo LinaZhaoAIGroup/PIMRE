@@ -173,8 +173,11 @@ def build_hsps_from_registration(crystal_data, kx, ky, G, theta, scale=1.0):
             np.argmin(np.abs(kx - kx_k)),
             np.argmin(np.abs(ky - ky_k)),
         ))
-        # M at every 60° starting from θ+30°
-        am = theta_rad + np.pi / 6 + i * np.pi / 3
+        # M at every 60° starting from θ−30°: each M lies 30° clockwise
+        # from its K (M = K − 30), matching Get_G_M_K and the DFT-side
+        # dft_KM construction, so (K_i, M_i) pairs affine-map without
+        # reflection.
+        am = theta_rad - np.pi / 6 + i * np.pi / 3
         kx_m = G_kx + M_dist * np.cos(am)
         ky_m = G_ky + M_dist * np.sin(am)
         M_points.append((

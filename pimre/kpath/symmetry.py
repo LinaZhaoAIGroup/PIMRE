@@ -81,6 +81,16 @@ def dft_KM(kx_dft, ky_dft, rotation_angle=0.0, scale=1.0):
     -------
     (KP_x, KP_y), (MP_x, MP_y) : tuple of ints
         Grid indices of K and M points.
+
+    Notes
+    -----
+    For a hexagonal BZ whose K vertices sit at 0 deg + 60i (on the kx axis),
+    K lies at 60 deg and M at 30 deg: K = (0.2887, 0.5), M = (0.433, 0.25)
+    in units of the column basis of ``reciprocal_to_cartesian``.  The
+    component indexing below (``KP[0, 1]`` for kx) encodes exactly that;
+    the swapped order would place "K" at 30 deg — an M direction — which
+    is geometrically impossible for a hexagonal BZ and rotates the whole
+    DFT-to-experiment alignment by -30 deg.
     """
     reciprocal_to_cartesian = np.array([[1, 0.5], [0, np.sqrt(3) / 2]])
     MP = reciprocal_to_cartesian.dot(np.array([[0], [0.5]])).T
@@ -94,10 +104,10 @@ def dft_KM(kx_dft, ky_dft, rotation_angle=0.0, scale=1.0):
         for pt in (KP, MP):
             pt[:] = gx + scale * (R @ (pt - np.array([[gx, gy]])).T).T
 
-    KP_x = np.argmin(np.abs(kx_dft - KP[0, 0]))
-    KP_y = np.argmin(np.abs(ky_dft - KP[0, 1]))
-    MP_x = np.argmin(np.abs(kx_dft - MP[0, 0]))
-    MP_y = np.argmin(np.abs(ky_dft - MP[0, 1]))
+    KP_x = np.argmin(np.abs(kx_dft - KP[0, 1]))
+    KP_y = np.argmin(np.abs(ky_dft - KP[0, 0]))
+    MP_x = np.argmin(np.abs(kx_dft - MP[0, 1]))
+    MP_y = np.argmin(np.abs(ky_dft - MP[0, 0]))
     return (KP_x, KP_y), (MP_x, MP_y)
 
 
@@ -196,9 +206,10 @@ def select_hsps_by_coverage(hsps, intensity, kx, ky, n_layers=5, radius=3):
     the measured momentum window (e.g. a quadrant symmetrized map only
     covers the kx=0 / ky=0 directions).  This helper scores every pair
     (K_i, M_i) — the orientation-compatible pair in which M lies 30 deg
-    counter-clockwise from K, matching the DFT-side K/M construction used
-    by the affine transform — by the fraction of nonzero pixels in their
-    neighborhood, and returns the best covered pair.
+    clockwise from K (M = K − 30), matching both the exp-side ring
+    construction in ``build_hsps_from_registration`` and the DFT-side
+    ``dft_KM`` used by the affine transform — by the fraction of nonzero
+    pixels in their neighborhood, and returns the best covered pair.
 
     Parameters
     ----------
